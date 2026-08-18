@@ -1,16 +1,31 @@
 import { useState, useEffect, useCallback } from 'react';
+import ErrorBoundary from './components/ErrorBoundary';
 import SearchBar from './components/SearchBar';
 import CurrentWeather from './components/CurrentWeather';
 import Forecast from './components/Forecast';
 import Favorites from './components/Favorites';
 import AirQuality from './components/AirQuality';
+import Alerts from './components/Alerts';
 import History from './components/History';
 import WeatherEffects from './components/WeatherEffects';
+import SunArc from './components/SunArc';
+import Footer from './components/Footer';
+import SearchChips from './components/SearchChips';
+import { SkeletonCurrentWeather, SkeletonForecast } from './components/Skeleton';
+import { ToastProvider, useToast } from './components/Toast';
 import { api } from './services/api';
 import { getWeatherGradient, getWeatherType } from './services/helpers';
 import './App.css';
 
-export default function App() {
+function getInitialTheme() {
+  const saved = localStorage.getItem('weatherpro-theme');
+  if (saved) return saved;
+  if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'auto';
+  return 'auto';
+}
+
+function AppInner() {
+  const { addToast } = useToast();
   const [weather, setWeather] = useState(null);
   const [forecast, setForecast] = useState(null);
   const [air, setAir] = useState(null);
@@ -18,14 +33,55 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [unit, setUnit] = useState('C');
+  const [unit, setUnit] = useState(() => localStorage.getItem('weatherpro-unit') || 'C');
   const [activeTab, setActiveTab] = useState('weather');
   const [loaded, setLoaded] = useState(false);
+  const [theme, setTheme] = useState(getInitialTheme);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('weatherpro-theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    localStorage.setItem('weatherpro-unit', unit);
+  }, [unit]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = () => {
+      const saved = localStorage.getItem('weatherpro-theme');
+      if (!saved || saved === 'auto') {
+        document.documentElement.setAttribute('data-theme', 'auto');
+      }
+    };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
 
   useEffect(() => {
     api.getFavorites().then(setFavorites).catch(() => {});
     api.getHistory().then(setHistory).catch(() => {});
     setTimeout(() => setLoaded(true), 100);
+  }, []);
+
+  useEffect(() => {
+    const tabs = ['weather', 'forecast', 'favorites', 'history'];
+    function handleKeyDown(e) {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+      if (e.key === 'Escape') {
+        const input = document.querySelector('.search-input');
+        if (input) { input.value = ''; input.blur(); }
+      }
+
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= 4) {
+        setActiveTab(tabs[num - 1]);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   const fetchAll = useCallback(async (params) => {
@@ -70,6 +126,7 @@ export default function App() {
   const handleToggleUnit = () => {
     const next = unit === 'C' ? 'F' : 'C';
     setUnit(next);
+    addToast(`Switched to °${next}`, 'info');
     if (weather) {
       const params = weather.coord
         ? { lat: weather.coord.lat, lon: weather.coord.lon }
@@ -84,8 +141,10 @@ export default function App() {
     const existing = favorites.find(f => f.city.toLowerCase() === weather.name.toLowerCase());
     if (existing) {
       await api.removeFavorite(existing.id);
+      addToast(`${weather.name} removed from favorites`, 'info');
     } else {
       await api.addFavorite({ city: weather.name, country: weather.sys.country, lat: weather.coord.lat, lon: weather.coord.lon });
+      addToast(`${weather.name} added to favorites`, 'success');
     }
     const favs = await api.getFavorites();
     setFavorites(favs);
@@ -99,6 +158,7 @@ export default function App() {
   const handleRemoveFav = async (id) => {
     await api.removeFavorite(id);
     setFavorites(await api.getFavorites());
+    addToast('Removed from favorites', 'info');
   };
 
   const handleRemoveHistory = async (id) => {
@@ -109,7 +169,17 @@ export default function App() {
   const handleClearHistory = async () => {
     await api.clearHistory();
     setHistory([]);
+    addToast('Search history cleared', 'info');
   };
+
+  const cycleTheme = () => {
+    const next = theme === 'auto' ? 'light' : theme === 'light' ? 'dark' : 'auto';
+    setTheme(next);
+    addToast(`Theme: ${next.charAt(0).toUpperCase() + next.slice(1)}`, 'info');
+  };
+
+  const themeIcon = theme === 'auto' ? '🌓' : theme === 'light' ? '☀️' : '🌙';
+  const themeLabel = theme === 'auto' ? 'Auto' : theme === 'light' ? 'Light' : 'Dark';
 
   const isFav = weather ? favorites.some(f => f.city.toLowerCase() === weather.name.toLowerCase()) : false;
   const weatherType = weather ? getWeatherType(weather.weather[0].icon) : 'clear';
@@ -126,16 +196,23 @@ export default function App() {
             <span className="logo-icon">🌍</span>
             <span className="logo-text">WeatherPro</span>
           </div>
-          <button className="location-btn" onClick={handleLocation} disabled={loading}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M12 2v4m0 12v4M2 12h4m12 0h4" />
-            </svg>
-            My Location
-          </button>
+          <div className="header-actions">
+            <button className="theme-btn" onClick={cycleTheme} title={`Theme: ${themeLabel}`}>
+              <span>{themeIcon}</span>
+            </button>
+            <button className="location-btn" onClick={handleLocation} disabled={loading}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+              </svg>
+              <span>My Location</span>
+            </button>
+          </div>
         </header>
 
         <SearchBar onSearch={handleSearch} loading={loading} />
+
+        <SearchChips history={history} onSelect={handleSearch} />
 
         {error && (
           <div className={`error-toast ${error.includes('Getting') ? 'info' : ''}`}>
@@ -144,16 +221,19 @@ export default function App() {
         )}
 
         <div className="tabs">
-          {['weather', 'forecast', 'favorites', 'history'].map(tab => (
+          {['weather', 'forecast', 'favorites', 'history'].map((tab, i) => (
             <button key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
               {tab === 'weather' && '☀️'} {tab === 'forecast' && '📅'} {tab === 'favorites' && '❤️'} {tab === 'history' && '🕐'}
               <span className="tab-label">{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
+              <span className="tab-shortcut">{i + 1}</span>
             </button>
           ))}
         </div>
 
         <main className="main-content">
-          {loading && (
+          {loading && activeTab === 'weather' && <SkeletonCurrentWeather />}
+          {loading && activeTab === 'forecast' && <SkeletonForecast />}
+          {loading && activeTab !== 'weather' && activeTab !== 'forecast' && (
             <div className="loading-overlay">
               <div className="loader">
                 <div className="loader-ring" />
@@ -163,7 +243,7 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === 'weather' && weather && (
+          {!loading && activeTab === 'weather' && weather && (
             <>
               <CurrentWeather
                 data={weather}
@@ -172,11 +252,19 @@ export default function App() {
                 onFavorite={handleFavorite}
                 isFav={isFav}
               />
+              {weather.sys && weather.sys.sunrise && (
+                <SunArc
+                  sunrise={weather.sys.sunrise}
+                  sunset={weather.sys.sunset}
+                  timezone={weather.timezone}
+                />
+              )}
+              {weather.coord && <Alerts lat={weather.coord.lat} lon={weather.coord.lon} />}
               {air && <AirQuality data={air} />}
             </>
           )}
 
-          {activeTab === 'forecast' && forecast && (
+          {!loading && activeTab === 'forecast' && forecast && (
             <Forecast data={forecast} unit={unit} />
           )}
 
@@ -215,7 +303,19 @@ export default function App() {
             </div>
           )}
         </main>
+
+        <Footer />
       </div>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ErrorBoundary>
+      <ToastProvider>
+        <AppInner />
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }

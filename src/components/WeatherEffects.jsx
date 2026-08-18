@@ -17,6 +17,10 @@ function Cloud({ delay, top, speed }) {
   return <div className="floating-cloud" style={{ top: `${top}%`, animationDelay: `${delay}s`, animationDuration: `${speed}s` }} />;
 }
 
+function FogLayer({ delay, top }) {
+  return <div className="fog-layer" style={{ top: `${top}%`, animationDelay: `${delay}s`, animationDuration: `${15 + Math.random() * 10}s` }} />;
+}
+
 export default function WeatherEffects({ iconCode }) {
   const type = getWeatherType(iconCode);
 
@@ -26,11 +30,11 @@ export default function WeatherEffects({ iconCode }) {
         id: i,
         delay: Math.random() * 2,
         left: Math.random() * 100,
-        duration: 0.4 + Math.random() * 0.4,
+        duration: 0.35 + Math.random() * 0.35,
       }));
     }
     if (type === 'snow') {
-      return Array.from({ length: 35 }, (_, i) => ({
+      return Array.from({ length: 40 }, (_, i) => ({
         id: i,
         delay: Math.random() * 5,
         left: Math.random() * 100,
@@ -47,11 +51,20 @@ export default function WeatherEffects({ iconCode }) {
 
   const clouds = useMemo(() => {
     if (type !== 'clouds' && type !== 'fog') return [];
-    return Array.from({ length: 5 }, (_, i) => ({
+    return Array.from({ length: 6 }, (_, i) => ({
       id: i,
-      delay: Math.random() * 10,
-      top: 10 + Math.random() * 60,
-      speed: 20 + Math.random() * 15,
+      delay: Math.random() * 12,
+      top: 8 + Math.random() * 55,
+      speed: 18 + Math.random() * 16,
+    }));
+  }, [type]);
+
+  const fogLayers = useMemo(() => {
+    if (type !== 'fog') return [];
+    return Array.from({ length: 4 }, (_, i) => ({
+      id: i,
+      delay: i * 4,
+      top: 25 + i * 15,
     }));
   }, [type]);
 
@@ -81,10 +94,19 @@ export default function WeatherEffects({ iconCode }) {
     );
   }
 
-  if (type === 'clouds' || type === 'fog') {
+  if (type === 'clouds') {
     return (
       <div className="weather-effects clouds-bg">
         {clouds.map(c => <Cloud key={c.id} {...c} />)}
+      </div>
+    );
+  }
+
+  if (type === 'fog') {
+    return (
+      <div className="weather-effects fog-bg">
+        {clouds.map(c => <Cloud key={c.id} {...c} />)}
+        {fogLayers.map(f => <FogLayer key={f.id} {...f} />)}
       </div>
     );
   }

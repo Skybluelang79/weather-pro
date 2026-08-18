@@ -41,6 +41,7 @@ export const api = {
     return get(`/weather/forecast?${qs}`);
   },
   getAirQuality: (lat, lon) => get(`/weather/air?lat=${lat}&lon=${lon}`),
+  getAlerts: (lat, lon) => get(`/weather/alerts?lat=${lat}&lon=${lon}`),
   geocode: (q) => get(`/geocode?q=${encodeURIComponent(q)}&limit=5`),
   getFavorites: () => get('/favorites'),
   addFavorite: (data) => post('/favorites', data),

@@ -1,9 +1,40 @@
 import express from 'express';
 import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
 
 config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DATA_FILE = path.join(__dirname, 'data.json');
+
+function loadData() {
+  try {
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    console.error('Failed to load data file:', e.message);
+  }
+  return { favorites: [], searchHistory: [] };
+}
+
+function saveData() {
+  try {
+    fs.writeFileSync(DATA_FILE, JSON.stringify({ favorites, searchHistory }, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save data file:', e.message);
+  }
+}
+
+const data = loadData();
+const favorites = data.favorites;
+const searchHistory = data.searchHistory;
 
 const app = express();
 const PORT = process.env.PORT || 3002;
@@ -13,9 +44,6 @@ const GEO_BASE = 'https://api.openweathermap.org/geo/1.0';
 
 app.use(cors());
 app.use(express.json());
-
-const favorites = [];
-const searchHistory = [];
 
 function genId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -84,6 +112,32 @@ app.get('/api/weather/air', async (req, res) => {
   }
 });
 
+app.get('/api/weather/alerts', async (req, res) => {
+  try {
+    const { lat, lon } = req.query;
+    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
+    // Use National Weather Service API for US alerts (free, no key required)
+    const url = `https://api.weather.gov/alerts/point?lat=${lat}&lon=${lon}`;
+    const r = await fetch(url, {
+      headers: { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' },
+    });
+    if (!r.ok) return res.json({ alerts: [] });
+    const data = await r.json();
+    const alerts = (data.features || []).slice(0, 5).map(f => ({
+      id: f.properties.id,
+      event: f.properties.event,
+      headline: f.properties.headline,
+      severity: f.properties.severity,
+      urgency: f.properties.urgency,
+      description: f.properties.description,
+      instruction: f.properties.instruction || '',
+    }));
+    res.json({ alerts });
+  } catch (err) {
+    res.json({ alerts: [] });
+  }
+});
+
 app.get('/api/geocode', async (req, res) => {
   try {
     const { q, limit = 5 } = req.query;
@@ -109,6 +163,7 @@ app.post('/api/favorites', (req, res) => {
   }
   const fav = { id: genId(), city, country, lat, lon, addedAt: Date.now() };
   favorites.unshift(fav);
+  saveData();
   res.json(fav);
 });
 
@@ -116,6 +171,7 @@ app.delete('/api/favorites/:id', (req, res) => {
   const idx = favorites.findIndex(f => f.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   favorites.splice(idx, 1);
+  saveData();
   res.json({ success: true });
 });
 
@@ -127,11 +183,13 @@ app.delete('/api/history/:id', (req, res) => {
   const idx = searchHistory.findIndex(h => h.id === req.params.id);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   searchHistory.splice(idx, 1);
+  saveData();
   res.json({ success: true });
 });
 
 app.delete('/api/history', (req, res) => {
   searchHistory.length = 0;
+  saveData();
   res.json({ success: true });
 });
 
