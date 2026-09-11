@@ -9,6 +9,7 @@ import Alerts from './components/Alerts';
 import History from './components/History';
 import WeatherEffects from './components/WeatherEffects';
 import SunArc from './components/SunArc';
+import MapPicker from './components/MapPicker';
 import Footer from './components/Footer';
 import SearchChips from './components/SearchChips';
 import { SkeletonCurrentWeather, SkeletonForecast } from './components/Skeleton';
@@ -37,6 +38,7 @@ function AppInner() {
   const [activeTab, setActiveTab] = useState('weather');
   const [loaded, setLoaded] = useState(false);
   const [theme, setTheme] = useState(getInitialTheme);
+  const [showMap, setShowMap] = useState(false);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -123,6 +125,12 @@ function AppInner() {
     );
   };
 
+  const handlePickLocation = (coords) => {
+    setShowMap(false);
+    fetchAll({ lat: coords.lat, lon: coords.lon, units: unit === 'F' ? 'imperial' : 'metric' });
+    setActiveTab('weather');
+  };
+
   const handleToggleUnit = () => {
     const next = unit === 'C' ? 'F' : 'C';
     setUnit(next);
@@ -206,6 +214,13 @@ function AppInner() {
                 <path d="M12 2v4m0 12v4M2 12h4m12 0h4" />
               </svg>
               <span>My Location</span>
+            </button>
+            <button className="map-btn" onClick={() => setShowMap(true)} title="Pick location on map">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" width="18" height="18">
+                <path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6 3-6-3z" />
+                <path d="M9 4v13m6-13v13" />
+              </svg>
+              <span>Map</span>
             </button>
           </div>
         </header>
@@ -305,6 +320,13 @@ function AppInner() {
         </main>
 
         <Footer />
+
+        <MapPicker
+          open={showMap}
+          onClose={() => setShowMap(false)}
+          onPick={handlePickLocation}
+          loading={loading}
+        />
       </div>
     </div>
   );

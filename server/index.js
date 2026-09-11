@@ -38,9 +38,56 @@ const searchHistory = data.searchHistory;
 
 const app = express();
 const PORT = process.env.PORT || 3002;
+const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS) || 0;
 const API_KEY = process.env.OPENWEATHER_API_KEY;
 const BASE = 'https://api.openweathermap.org/data/2.5';
 const GEO_BASE = 'https://api.openweathermap.org/geo/1.0';
+
+const DEFAULT_TTL = {
+  weather: 10 * 60 * 1000,   // 10 minutes
+  forecast: 30 * 60 * 1000,  // 30 minutes
+  air: 60 * 60 * 1000,       // 1 hour
+  geocode: 24 * 60 * 60 * 1000, // 24 hours
+};
+
+if (CACHE_TTL_MS > 0) {
+  for (const key of Object.keys(DEFAULT_TTL)) DEFAULT_TTL[key] = CACHE_TTL_MS;
+}
+
+const fetchCache = new Map();
+
+function cacheGet(key) {
+  const hit = fetchCache.get(key);
+  if (!hit) return null;
+  if (hit.expires > Date.now()) return hit.value;
+  fetchCache.delete(key);
+  return null;
+}
+
+function cacheSet(key, value, ttl) {
+  if (fetchCache.size > 500) {
+    const now = Date.now();
+    for (const [k, v] of fetchCache) {
+      if (v.expires <= now) fetchCache.delete(k);
+    }
+  }
+  fetchCache.set(key, { value, expires: Date.now() + (ttl || DEFAULT_TTL.geocode) });
+}
+
+async function fetchJson(url, { ttl, headers } = {}) {
+  const cached = cacheGet(url);
+  if (cached !== null) return cached;
+  const r = await fetch(url, headers ? { headers } : undefined);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({ message: `HTTP ${r.status}` }));
+    const e = new Error(err.message || `HTTP ${r.status}`);
+    e.status = r.status;
+    throw e;
+  }
+  const data = await r.json();
+  cacheSet(url, data, ttl);
+  return data;
+}
 
 app.use(cors());
 app.use(express.json());
@@ -60,19 +107,18 @@ app.get('/api/weather/current', async (req, res) => {
     } else {
       return res.status(400).json({ error: 'Provide city or lat/lon' });
     }
-    const r = await fetch(url);
-    const data = await r.json();
+    const data = await fetchJson(url, { ttl: DEFAULT_TTL.weather });
     if (data.cod && data.cod !== 200) {
       return res.status(data.cod).json({ error: data.message });
     }
     if (city && !searchHistory.find(h => h.city.toLowerCase() === data.name.toLowerCase())) {
-      searchHistory.unshift({ id: genId(), city: data.name, country: data.sys.country, timestamp: Date.now() });
+      searchHistory.unshift({ id: genId(), city: data.name, country: data.sys?.country, timestamp: Date.now() });
       if (searchHistory.length > 20) searchHistory.pop();
     }
     res.json(data);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch weather' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to fetch weather' });
   }
 });
 
@@ -87,15 +133,14 @@ app.get('/api/weather/forecast', async (req, res) => {
     } else {
       return res.status(400).json({ error: 'Provide city or lat/lon' });
     }
-    const r = await fetch(url);
-    const data = await r.json();
+    const data = await fetchJson(url, { ttl: DEFAULT_TTL.forecast });
     if (data.cod && data.cod !== '200') {
       return res.status(400).json({ error: data.message });
     }
     res.json(data);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to fetch forecast' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to fetch forecast' });
   }
 });
 
@@ -103,12 +148,11 @@ app.get('/api/weather/air', async (req, res) => {
   try {
     const { lat, lon } = req.query;
     if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
-    const url = `http://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${API_KEY}`;
-    const r = await fetch(url);
-    const data = await r.json();
+    const url = `https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${API_KEY}`;
+    const data = await fetchJson(url, { ttl: DEFAULT_TTL.air });
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch air quality' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to fetch air quality' });
   }
 });
 
@@ -133,7 +177,7 @@ app.get('/api/weather/alerts', async (req, res) => {
       instruction: f.properties.instruction || '',
     }));
     res.json({ alerts });
-  } catch (err) {
+  } catch {
     res.json({ alerts: [] });
   }
 });
@@ -143,11 +187,22 @@ app.get('/api/geocode', async (req, res) => {
     const { q, limit = 5 } = req.query;
     if (!q) return res.status(400).json({ error: 'q required' });
     const url = `${GEO_BASE}/direct?q=${encodeURIComponent(q)}&limit=${limit}&appid=${API_KEY}`;
-    const r = await fetch(url);
-    const data = await r.json();
+    const data = await fetchJson(url, { ttl: DEFAULT_TTL.geocode });
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to geocode' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to geocode' });
+  }
+});
+
+app.get('/api/reverse-geocode', async (req, res) => {
+  try {
+    const { lat, lon, limit = 1 } = req.query;
+    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
+    const url = `${GEO_BASE}/reverse?lat=${lat}&lon=${lon}&limit=${limit}&appid=${API_KEY}`;
+    const data = await fetchJson(url, { ttl: DEFAULT_TTL.geocode });
+    res.json(data);
+  } catch (err) {
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to reverse geocode' });
   }
 });
 

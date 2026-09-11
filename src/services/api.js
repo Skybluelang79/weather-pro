@@ -43,6 +43,7 @@ export const api = {
   getAirQuality: (lat, lon) => get(`/weather/air?lat=${lat}&lon=${lon}`),
   getAlerts: (lat, lon) => get(`/weather/alerts?lat=${lat}&lon=${lon}`),
   geocode: (q) => get(`/geocode?q=${encodeURIComponent(q)}&limit=5`),
+  reverseGeocode: (lat, lon) => get(`/reverse-geocode?lat=${lat}&lon=${lon}&limit=1`),
   getFavorites: () => get('/favorites'),
   addFavorite: (data) => post('/favorites', data),
   removeFavorite: (id) => del(`/favorites/${id}`),
