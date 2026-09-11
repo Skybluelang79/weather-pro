@@ -13,13 +13,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@netlify/blobs": "^11.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "leaflet": "^1.9.4",
     "node-fetch": "^2.7.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "serverless-http": "^4.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
