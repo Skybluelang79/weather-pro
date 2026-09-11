@@ -22,29 +22,28 @@ self.addEventListener('fetch', (e) => {
 
   if (url.pathname.startsWith('/api/')) {
     e.respondWith(
-      fetch(e.request)
-        .then((res) => {
-          if (res.ok) {
-            const clone = res.clone();
-            caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
-          }
-          return res;
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(e.request).then((cached) => {
+          const fetched = fetch(e.request).then((res) => {
+            if (res.ok) cache.put(e.request, res.clone());
+            return res;
+          }).catch(() => cached);
+          return cached || fetched;
         })
-        .catch(() => caches.match(e.request))
+      )
     );
     return;
   }
 
   e.respondWith(
-    caches.match(e.request).then((cached) => {
-      const fetched = fetch(e.request).then((res) => {
-        if (res.ok) {
-          const clone = res.clone();
-          caches.open(CACHE_NAME).then((c) => c.put(e.request, clone));
-        }
-        return res;
-      });
-      return cached || fetched;
-    })
+    caches.open(CACHE_NAME).then((cache) =>
+      cache.match(e.request).then((cached) => {
+        const fetched = fetch(e.request).then((res) => {
+          if (res.ok) cache.put(e.request, res.clone());
+          return res;
+        }).catch(() => cached);
+        return cached || fetched;
+      })
+    )
   );
 });

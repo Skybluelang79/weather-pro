@@ -1,12 +1,18 @@
 import { useState, useMemo } from 'react';
+import type { ForecastData } from '../types';
 import { getWeatherIcon, formatTemp, getWindDirection } from '../services/helpers';
 
-export default function Forecast({ data, unit }) {
-  const [expandedHour, setExpandedHour] = useState(null);
+interface ForecastProps {
+  data: ForecastData;
+  unit: string;
+}
+
+export default function Forecast({ data, unit }: ForecastProps) {
+  const [expandedHour, setExpandedHour] = useState<number | null>(null);
 
   const days = useMemo(() => {
     if (!data || !data.list) return [];
-    const daily = {};
+    const daily: Record<string, { temps: number[]; icons: string[]; descs: string[]; items: ForecastData['list'] }> = {};
     data.list.forEach(item => {
       const day = new Date(item.dt * 1000).toLocaleDateString('en-US', { weekday: 'short' });
       if (!daily[day]) {

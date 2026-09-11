@@ -1,24 +1,30 @@
 import { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
+import type { GeoLocation } from '../types';
 
-export default function SearchBar({ onSearch, loading }) {
+interface SearchBarProps {
+  onSearch: (city: string) => void;
+  loading: boolean;
+}
+
+export default function SearchBar({ onSearch, loading }: SearchBarProps) {
   const [query, setQuery] = useState('');
-  const [suggestions, setSuggestions] = useState([]);
+  const [suggestions, setSuggestions] = useState<GeoLocation[]>([]);
   const [showSug, setShowSug] = useState(false);
-  const timer = useRef(null);
-  const wrapperRef = useRef(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    function handleClick(e) {
-      if (wrapperRef.current && !wrapperRef.current.contains(e.target)) setShowSug(false);
+    function handleClick(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setShowSug(false);
     }
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
   }, []);
 
-  const handleChange = (val) => {
+  const handleChange = (val: string) => {
     setQuery(val);
-    clearTimeout(timer.current);
+    if (timer.current) clearTimeout(timer.current);
     if (val.length < 2) { setSuggestions([]); return; }
     timer.current = setTimeout(async () => {
       try {
@@ -29,7 +35,7 @@ export default function SearchBar({ onSearch, loading }) {
     }, 300);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim()) {
       onSearch(query.trim());
@@ -37,7 +43,7 @@ export default function SearchBar({ onSearch, loading }) {
     }
   };
 
-  const selectSuggestion = (s) => {
+  const selectSuggestion = (s: GeoLocation) => {
     setQuery(s.name);
     setShowSug(false);
     onSearch(s.name);

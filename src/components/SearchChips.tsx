@@ -1,4 +1,11 @@
-export default function SearchChips({ history, onSelect }) {
+import type { HistoryEntry } from '../types';
+
+interface SearchChipsProps {
+  history: HistoryEntry[];
+  onSelect: (city: string) => void;
+}
+
+export default function SearchChips({ history, onSelect }: SearchChipsProps) {
   if (!history || history.length === 0) return null;
 
   const recent = history.slice(0, 5);

@@ -15,10 +15,13 @@ import SearchChips from './components/SearchChips';
 import { SkeletonCurrentWeather, SkeletonForecast } from './components/Skeleton';
 import { ToastProvider, useToast } from './components/Toast';
 import { api } from './services/api';
-import { getWeatherGradient, getWeatherType } from './services/helpers';
+import { getWeatherGradient, getWeatherType, generateFaviconSVG } from './services/helpers';
+import TempGraph from './components/TempGraph';
+import WeatherCompare from './components/WeatherCompare';
+import type { WeatherData, ForecastData, AirQualityData, Favorite, HistoryEntry } from './types';
 import './App.css';
 
-function getInitialTheme() {
+function getInitialTheme(): string {
   const saved = localStorage.getItem('weatherpro-theme');
   if (saved) return saved;
   if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'auto';
@@ -27,18 +30,19 @@ function getInitialTheme() {
 
 function AppInner() {
   const { addToast } = useToast();
-  const [weather, setWeather] = useState(null);
-  const [forecast, setForecast] = useState(null);
-  const [air, setAir] = useState(null);
-  const [favorites, setFavorites] = useState([]);
-  const [history, setHistory] = useState([]);
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  const [forecast, setForecast] = useState<ForecastData | null>(null);
+  const [air, setAir] = useState<AirQualityData | null>(null);
+  const [favorites, setFavorites] = useState<Favorite[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [unit, setUnit] = useState(() => localStorage.getItem('weatherpro-unit') || 'C');
   const [activeTab, setActiveTab] = useState('weather');
   const [loaded, setLoaded] = useState(false);
-  const [theme, setTheme] = useState(getInitialTheme);
+  const [theme, setTheme] = useState<string>(getInitialTheme);
   const [showMap, setShowMap] = useState(false);
+  const [compareWeather, setCompareWeather] = useState<WeatherData | null>(null);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -68,12 +72,28 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
+    if (!weather) return;
+    const iconCode = weather.weather[0].icon;
+    const svg = generateFaviconSVG(iconCode);
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    let link = document.querySelector<HTMLLinkElement>("link[rel~='icon']");
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = url;
+    return () => { URL.revokeObjectURL(url); };
+  }, [weather]);
+
+  useEffect(() => {
     const tabs = ['weather', 'forecast', 'favorites', 'history'];
-    function handleKeyDown(e) {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.target instanceof HTMLElement && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
 
       if (e.key === 'Escape') {
-        const input = document.querySelector('.search-input');
+        const input = document.querySelector<HTMLInputElement>('.search-input');
         if (input) { input.value = ''; input.blur(); }
       }
 
@@ -86,7 +106,7 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const fetchAll = useCallback(async (params) => {
+  const fetchAll = useCallback(async (params: Record<string, string>, recordAs?: string) => {
     setLoading(true);
     setError('');
     try {
@@ -99,9 +119,12 @@ function AppInner() {
       if (w.coord) {
         api.getAirQuality(w.coord.lat, w.coord.lon).then(setAir).catch(() => {});
       }
-      api.getHistory().then(setHistory).catch(() => {});
+      if (recordAs) {
+        api.recordHistory({ city: w.name || recordAs, country: w.sys?.country }).catch(() => {});
+        api.getHistory().then(setHistory).catch(() => {});
+      }
     } catch (err) {
-      setError(err.message || 'Failed to fetch weather');
+      setError((err as Error).message || 'Failed to fetch weather');
       setWeather(null);
       setForecast(null);
       setAir(null);
@@ -110,8 +133,8 @@ function AppInner() {
     }
   }, []);
 
-  const handleSearch = (city) => {
-    fetchAll({ city, units: unit === 'F' ? 'imperial' : 'metric' });
+  const handleSearch = (city: string) => {
+    fetchAll({ city, units: unit === 'F' ? 'imperial' : 'metric' }, city);
   };
 
   const handleLocation = () => {
@@ -119,16 +142,27 @@ function AppInner() {
     setError('Getting location...');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        fetchAll({ lat: pos.coords.latitude, lon: pos.coords.longitude, units: unit === 'F' ? 'imperial' : 'metric' });
+        fetchAll({ lat: String(pos.coords.latitude), lon: String(pos.coords.longitude), units: unit === 'F' ? 'imperial' : 'metric' });
       },
       () => setError('Location access denied. Please search by city name.')
     );
   };
 
-  const handlePickLocation = (coords) => {
+  const handlePickLocation = (coords: { lat: number; lon: number }) => {
     setShowMap(false);
-    fetchAll({ lat: coords.lat, lon: coords.lon, units: unit === 'F' ? 'imperial' : 'metric' });
+    fetchAll({ lat: String(coords.lat), lon: String(coords.lon), units: unit === 'F' ? 'imperial' : 'metric' }, '__map__');
     setActiveTab('weather');
+  };
+
+  const handleCompareCity = async (city: string) => {
+    if (!city.trim()) return;
+    try {
+      const w = await api.getCurrent({ city: city.trim(), units: unit === 'F' ? 'imperial' : 'metric' });
+      setCompareWeather(w);
+      addToast(`Added ${w.name} for comparison`, 'success');
+    } catch (err) {
+      addToast((err as Error).message || 'Could not load comparison city', 'error');
+    }
   };
 
   const handleToggleUnit = () => {
@@ -136,8 +170,8 @@ function AppInner() {
     setUnit(next);
     addToast(`Switched to °${next}`, 'info');
     if (weather) {
-      const params = weather.coord
-        ? { lat: weather.coord.lat, lon: weather.coord.lon }
+      const params: Record<string, string> = weather.coord
+        ? { lat: String(weather.coord.lat), lon: String(weather.coord.lon) }
         : { city: weather.name };
       params.units = next === 'F' ? 'imperial' : 'metric';
       fetchAll(params);
@@ -158,18 +192,18 @@ function AppInner() {
     setFavorites(favs);
   };
 
-  const handleFavClick = (fav) => {
-    fetchAll({ city: fav.city, units: unit === 'F' ? 'imperial' : 'metric' });
+  const handleFavClick = (fav: Favorite) => {
+    fetchAll({ city: fav.city, units: unit === 'F' ? 'imperial' : 'metric' }, fav.city);
     setActiveTab('weather');
   };
 
-  const handleRemoveFav = async (id) => {
+  const handleRemoveFav = async (id: string) => {
     await api.removeFavorite(id);
     setFavorites(await api.getFavorites());
     addToast('Removed from favorites', 'info');
   };
 
-  const handleRemoveHistory = async (id) => {
+  const handleRemoveHistory = async (id: string) => {
     await api.removeHistory(id);
     setHistory(await api.getHistory());
   };
@@ -276,11 +310,24 @@ function AppInner() {
               )}
               {weather.coord && <Alerts lat={weather.coord.lat} lon={weather.coord.lon} />}
               {air && <AirQuality data={air} />}
+              <div className="compare-bar">
+                <span className="compare-bar-label">Compare with:</span>
+                <form className="compare-bar-form" onSubmit={(e) => { e.preventDefault(); const input = (e.target as HTMLFormElement).elements[0] as HTMLInputElement; handleCompareCity(input.value); e.target.reset(); }}>
+                  <input type="text" placeholder="Another city..." className="compare-bar-input" />
+                  <button type="submit" className="compare-bar-btn">+</button>
+                </form>
+              </div>
+              {weather && compareWeather && (
+                <WeatherCompare weatherA={weather} weatherB={compareWeather} unit={unit} />
+              )}
             </>
           )}
 
           {!loading && activeTab === 'forecast' && forecast && (
-            <Forecast data={forecast} unit={unit} />
+            <>
+              <Forecast data={forecast} unit={unit} />
+              <TempGraph data={forecast} unit={unit} />
+            </>
           )}
 
           {activeTab === 'favorites' && (

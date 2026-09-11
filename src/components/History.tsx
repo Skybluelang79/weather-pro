@@ -1,4 +1,13 @@
-export default function History({ history, onSearch, onRemove, onClear }) {
+import type { HistoryEntry } from '../types';
+
+interface HistoryProps {
+  history: HistoryEntry[];
+  onSearch: (city: string) => void;
+  onRemove: (id: string) => void;
+  onClear: () => void;
+}
+
+export default function History({ history, onSearch, onRemove, onClear }: HistoryProps) {
   return (
     <div className="history animate-slide-up">
       <div className="history-header">

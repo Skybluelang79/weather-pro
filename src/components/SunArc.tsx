@@ -1,21 +1,34 @@
-import { useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
-export default function SunArc({ sunrise, sunset, timezone }) {
+interface SunArcProps {
+  sunrise: number;
+  sunset: number;
+  timezone: number;
+}
+
+export default function SunArc({ sunrise, sunset, timezone }: SunArcProps) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60000);
+    return () => clearInterval(id);
+  }, []);
+
   const info = useMemo(() => {
-    const now = Date.now() / 1000;
+    const nowSec = now / 1000;
     const sunriseTime = sunrise;
     const sunsetTime = sunset;
     const dayLength = sunsetTime - sunriseTime;
-    const elapsed = now - sunriseTime;
+    const elapsed = nowSec - sunriseTime;
     const progress = Math.max(0, Math.min(1, elapsed / dayLength));
 
-    const isDay = now >= sunriseTime && now <= sunsetTime;
+    const isDay = nowSec >= sunriseTime && nowSec <= sunsetTime;
 
     const angle = progress * Math.PI;
     const arcX = 50 + 40 * Math.cos(Math.PI - angle);
     const arcY = 90 - 80 * Math.sin(angle);
 
-    const fmtTime = (ts) => {
+    const fmtTime = (ts: number) => {
       const d = new Date((ts + timezone) * 1000);
       return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
     };
@@ -28,7 +41,7 @@ export default function SunArc({ sunrise, sunset, timezone }) {
       sunriseLabel: fmtTime(sunriseTime),
       sunsetLabel: fmtTime(sunsetTime),
     };
-  }, [sunrise, sunset, timezone]);
+  }, [sunrise, sunset, timezone, now]);
 
   return (
     <div className="sun-arc-container">

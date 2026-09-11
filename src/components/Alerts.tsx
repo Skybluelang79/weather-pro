@@ -1,9 +1,15 @@
 import { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import type { AlertData } from '../types';
 
-export default function Alerts({ lat, lon }) {
-  const [alerts, setAlerts] = useState([]);
-  const [expanded, setExpanded] = useState(null);
+interface AlertsProps {
+  lat: number;
+  lon: number;
+}
+
+export default function Alerts({ lat, lon }: AlertsProps) {
+  const [alerts, setAlerts] = useState<AlertData[]>([]);
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {

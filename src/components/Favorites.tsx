@@ -1,4 +1,12 @@
-export default function Favorites({ favorites, onClick, onRemove }) {
+import type { Favorite } from '../types';
+
+interface FavoritesProps {
+  favorites: Favorite[];
+  onClick: (fav: Favorite) => void;
+  onRemove: (id: string) => void;
+}
+
+export default function Favorites({ favorites, onClick, onRemove }: FavoritesProps) {
   return (
     <div className="favorites animate-slide-up">
       <h3 className="section-title">Saved Locations</h3>

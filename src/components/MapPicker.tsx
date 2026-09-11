@@ -3,18 +3,25 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { api } from '../services/api';
 
-export default function MapPicker({ open, onClose, onPick, loading }) {
-  const mapRef = useRef(null);
-  const containerRef = useRef(null);
-  const markerRef = useRef(null);
-  const [coords, setCoords] = useState(null);
+interface MapPickerProps {
+  open: boolean;
+  onClose: () => void;
+  onPick: (coords: { lat: number; lon: number }) => void;
+  loading: boolean;
+}
+
+export default function MapPicker({ open, onClose, onPick, loading }: MapPickerProps) {
+  const mapRef = useRef<any>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const markerRef = useRef<any>(null);
+  const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [place, setPlace] = useState('');
   const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
 
-    const map = L.map(containerRef.current, { zoomControl: true }).setView([20, 0], 2);
+    const map = L.map(containerRef.current!, { zoomControl: true }).setView([20, 0], 2);
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
@@ -28,13 +35,13 @@ export default function MapPicker({ open, onClose, onPick, loading }) {
       iconAnchor: [16, 30],
     });
 
-    const handleClick = (e) => {
+    const handleClick = (e: any) => {
       const lat = Number(e.latlng.lat.toFixed(4));
       const lon = Number(e.latlng.lng.toFixed(4));
       setCoords({ lat, lon });
       if (markerRef.current) markerRef.current.setLatLng(e.latlng);
       else markerRef.current = L.marker(e.latlng, { icon, draggable: true }).addTo(map);
-      markerRef.current.on('dragend', (ev) => {
+      markerRef.current.on('dragend', (ev: any) => {
         const p = ev.target.getLatLng();
         setCoords({ lat: Number(p.lat.toFixed(4)), lon: Number(p.lng.toFixed(4)) });
       });

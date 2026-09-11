@@ -1,6 +1,11 @@
+import type { AirQualityData } from '../types';
 import { getAQILevel } from '../services/helpers';
 
-export default function AirQuality({ data }) {
+interface AirQualityProps {
+  data: AirQualityData;
+}
+
+export default function AirQuality({ data }: AirQualityProps) {
   if (!data || !data.list || !data.list[0]) return null;
 
   const aqi = data.list[0].main.aqi;
@@ -8,12 +13,12 @@ export default function AirQuality({ data }) {
   const components = data.list[0].components;
 
   const pollutants = [
-    { key: 'pm2_5', label: 'PM2.5', unit: 'μg/m³' },
-    { key: 'pm10', label: 'PM10', unit: 'μg/m³' },
-    { key: 'o3', label: 'O₃', unit: 'μg/m³' },
-    { key: 'no2', label: 'NO₂', unit: 'μg/m³' },
-    { key: 'so2', label: 'SO₂', unit: 'μg/m³' },
-    { key: 'co', label: 'CO', unit: 'μg/m³' },
+    { key: 'pm2_5' as const, label: 'PM2.5', unit: 'μg/m³' },
+    { key: 'pm10' as const, label: 'PM10', unit: 'μg/m³' },
+    { key: 'o3' as const, label: 'O₃', unit: 'μg/m³' },
+    { key: 'no2' as const, label: 'NO₂', unit: 'μg/m³' },
+    { key: 'so2' as const, label: 'SO₂', unit: 'μg/m³' },
+    { key: 'co' as const, label: 'CO', unit: 'μg/m³' },
   ];
 
   return (

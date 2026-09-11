@@ -1,28 +1,60 @@
 import { useMemo } from 'react';
+import type { WeatherType } from '../types';
 import { getWeatherType } from '../services/helpers';
 
-function RainDrop({ delay, left, duration }) {
+interface RainDropProps {
+  delay: number;
+  left: number;
+  duration: number;
+}
+
+function RainDrop({ delay, left, duration }: RainDropProps) {
   return <div className="rain-drop" style={{ left: `${left}%`, animationDelay: `${delay}s`, animationDuration: `${duration}s` }} />;
 }
 
-function SnowFlake({ delay, left, duration }) {
+interface SnowFlakeProps {
+  delay: number;
+  left: number;
+  duration: number;
+}
+
+function SnowFlake({ delay, left, duration }: SnowFlakeProps) {
   return <div className="snow-flake" style={{ left: `${left}%`, animationDelay: `${delay}s`, animationDuration: `${duration}s` }} />;
 }
 
-function SunRay({ angle }) {
+interface SunRayProps {
+  angle: number;
+}
+
+function SunRay({ angle }: SunRayProps) {
   return <div className="sun-ray" style={{ transform: `rotate(${angle}deg)` }} />;
 }
 
-function Cloud({ delay, top, speed }) {
+interface CloudProps {
+  delay: number;
+  top: number;
+  speed: number;
+}
+
+function Cloud({ delay, top, speed }: CloudProps) {
   return <div className="floating-cloud" style={{ top: `${top}%`, animationDelay: `${delay}s`, animationDuration: `${speed}s` }} />;
 }
 
-function FogLayer({ delay, top }) {
+interface FogLayerProps {
+  delay: number;
+  top: number;
+}
+
+function FogLayer({ delay, top }: FogLayerProps) {
   return <div className="fog-layer" style={{ top: `${top}%`, animationDelay: `${delay}s`, animationDuration: `${15 + Math.random() * 10}s` }} />;
 }
 
-export default function WeatherEffects({ iconCode }) {
-  const type = getWeatherType(iconCode);
+interface WeatherEffectsProps {
+  iconCode: string;
+}
+
+export default function WeatherEffects({ iconCode }: WeatherEffectsProps) {
+  const type: WeatherType = getWeatherType(iconCode);
 
   const particles = useMemo(() => {
     if (type === 'rain' || type === 'storm') {

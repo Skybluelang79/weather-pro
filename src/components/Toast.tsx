@@ -1,13 +1,27 @@
 import { createContext, useContext, useState, useCallback } from 'react';
 
-const ToastContext = createContext(null);
+interface Toast {
+  id: number;
+  message: string;
+  type: string;
+}
+
+interface ToastContextValue {
+  addToast: (message: string, type?: string, duration?: number) => void;
+}
+
+const ToastContext = createContext<ToastContextValue | null>(null);
 
 let toastId = 0;
 
-export function ToastProvider({ children }) {
-  const [toasts, setToasts] = useState([]);
+interface ToastProviderProps {
+  children: React.ReactNode;
+}
 
-  const addToast = useCallback((message, type = 'info', duration = 3000) => {
+export function ToastProvider({ children }: ToastProviderProps) {
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const addToast = useCallback((message: string, type = 'info', duration = 3000) => {
     const id = ++toastId;
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => {
@@ -15,7 +29,7 @@ export function ToastProvider({ children }) {
     }, duration);
   }, []);
 
-  const removeToast = useCallback((id) => {
+  const removeToast = useCallback((id: number) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
@@ -42,7 +56,7 @@ export function ToastProvider({ children }) {
   );
 }
 
-export function useToast() {
+export function useToast(): ToastContextValue {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error('useToast must be used within ToastProvider');
   return ctx;

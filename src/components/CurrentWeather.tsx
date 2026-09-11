@@ -1,6 +1,12 @@
+import type { WeatherData } from '../types';
 import { getWeatherIcon, formatTemp, formatTime, getWindDirection } from '../services/helpers';
 
-function WindCompass({ deg, speed }) {
+interface WindCompassProps {
+  deg: number;
+  speed: number;
+}
+
+function WindCompass({ deg, speed }: WindCompassProps) {
   return (
     <div className="detail-card">
       <div className="wind-compass">
@@ -22,7 +28,15 @@ function WindCompass({ deg, speed }) {
   );
 }
 
-export default function CurrentWeather({ data, unit, onToggleUnit, onFavorite, isFav }) {
+interface CurrentWeatherProps {
+  data: WeatherData;
+  unit: string;
+  onToggleUnit: () => void;
+  onFavorite: () => void;
+  isFav: boolean;
+}
+
+export default function CurrentWeather({ data, unit, onToggleUnit, onFavorite, isFav }: CurrentWeatherProps) {
   if (!data) return null;
 
   const icon = data.weather[0].icon;

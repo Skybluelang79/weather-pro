@@ -68,6 +68,29 @@ app.use((req, res, next) => {
   next();
 });
 
+const buckets = new Map();
+const RATE_LIMIT = 60;
+const RATE_WINDOW_MS = 60 * 1000;
+
+function rateLimiter(req, res, next) {
+  if (!req.path.startsWith('/api')) return next();
+  const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  const now = Date.now();
+  let bucket = buckets.get(ip);
+  if (!bucket || now - bucket.windowStart >= RATE_WINDOW_MS) {
+    bucket = { windowStart: now, tokens: RATE_LIMIT - 1 };
+    buckets.set(ip, bucket);
+    return next();
+  }
+  if (bucket.tokens <= 0) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again later.' });
+  }
+  bucket.tokens--;
+  next();
+}
+
+app.use(rateLimiter);
+
 const favorites = [];
 const searchHistory = [];
 let initPromise = null;
@@ -105,11 +128,6 @@ app.get('/api/weather/current', async (req, res) => {
     const data = await fetchJson(url, { ttl: DEFAULT_TTL.weather });
     if (data.cod && data.cod !== 200) {
       return res.status(data.cod).json({ error: data.message });
-    }
-    if (city && !searchHistory.find(h => h.city.toLowerCase() === data.name.toLowerCase())) {
-      searchHistory.unshift({ id: genId(), city: data.name, country: data.sys?.country, timestamp: Date.now() });
-      if (searchHistory.length > 20) searchHistory.pop();
-      await persist();
     }
     res.json(data);
   } catch (err) {
@@ -156,23 +174,38 @@ app.get('/api/weather/alerts', async (req, res) => {
   try {
     const { lat, lon } = req.query;
     if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
-    // Use National Weather Service API for US alerts (free, no key required)
-    const url = `https://api.weather.gov/alerts/point?lat=${lat}&lon=${lon}`;
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' },
-    });
-    if (!r.ok) return res.json({ alerts: [] });
-    const data = await r.json();
-    const alerts = (data.features || []).slice(0, 5).map(f => ({
-      id: f.properties.id,
-      event: f.properties.event,
-      headline: f.properties.headline,
-      severity: f.properties.severity,
-      urgency: f.properties.urgency,
-      description: f.properties.description,
-      instruction: f.properties.instruction || '',
-    }));
-    res.json({ alerts });
+    // Determine if location is in the US by checking the NWS API.
+    // If the point resolves successfully, it's in the US — use NWS alerts.
+    // Otherwise return empty alerts (OWM free tier does not include alerts).
+    try {
+      const pointUrl = `https://api.weather.gov/points/${lat},${lon}`;
+      const pointR = await fetch(pointUrl, {
+        headers: { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' },
+      });
+      if (pointR.ok) {
+        // US location — fetch alerts from NWS
+        const alertsUrl = `https://api.weather.gov/alerts/point?lat=${lat}&lon=${lon}`;
+        const r = await fetch(alertsUrl, {
+          headers: { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' },
+        });
+        if (!r.ok) return res.json({ alerts: [] });
+        const data = await r.json();
+        const alerts = (data.features || []).slice(0, 5).map(f => ({
+          id: f.properties.id,
+          event: f.properties.event,
+          headline: f.properties.headline,
+          severity: f.properties.severity,
+          urgency: f.properties.urgency,
+          description: f.properties.description,
+          instruction: f.properties.instruction || '',
+        }));
+        return res.json({ alerts });
+      }
+    } catch {
+      // NWS check failed — fall through
+    }
+    // Non-US location or NWS unavailable — no free global alerts source
+    res.json({ alerts: [] });
   } catch {
     res.json({ alerts: [] });
   }
@@ -232,6 +265,28 @@ app.delete('/api/favorites/:id', async (req, res) => {
 app.get('/api/history', async (req, res) => {
   await ensureInitialized();
   res.json(searchHistory);
+});
+
+app.post('/api/history/record', async (req, res) => {
+  try {
+    await ensureInitialized();
+    const { city, country } = req.body;
+    if (!city) return res.status(400).json({ error: 'city required' });
+    const existing = searchHistory.find(h => h.city.toLowerCase() === city.toLowerCase());
+    if (existing) {
+      existing.timestamp = Date.now();
+      searchHistory.splice(searchHistory.indexOf(existing), 1);
+      searchHistory.unshift(existing);
+    } else {
+      searchHistory.unshift({ id: genId(), city, country, timestamp: Date.now() });
+      if (searchHistory.length > 20) searchHistory.pop();
+    }
+    await persist();
+    res.json({ success: true, searchHistory });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || 'Failed to record history' });
+  }
 });
 
 app.delete('/api/history/:id', async (req, res) => {
