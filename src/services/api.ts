@@ -1,37 +1,42 @@
-import type { WeatherData, ForecastData, AirQualityData, AlertData, GeoLocation, Favorite, HistoryEntry } from '../types';
+import type {
+  WeatherData, ForecastData, AirQualityData, AlertData, GeoLocation, Favorite, HistoryEntry,
+  PremiumForecastData, AIAnswer, Plan, Subscription, AlertRule, AlertNotification, PlanId,
+} from '../types';
 
 const BASE = '/api';
+const SUBSCRIBER_KEY = 'weatherpro-subscriber-id';
 
-async function get(path: string): Promise<any> {
-  const r = await fetch(`${BASE}${path}`);
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(e.error || `HTTP ${r.status}`);
+export function getSubscriberId(): string {
+  let id = localStorage.getItem(SUBSCRIBER_KEY);
+  if (!id) {
+    id = `sub_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(SUBSCRIBER_KEY, id);
   }
-  return r.json();
+  return id;
 }
 
-async function post(path: string, body: unknown): Promise<any> {
+async function request(path: string, options?: RequestInit): Promise<any> {
   const r = await fetch(`${BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-subscriber-id': getSubscriberId(),
+      ...options?.headers,
+    },
   });
   if (!r.ok) {
     const e = await r.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(e.error || `HTTP ${r.status}`);
+    const error = new Error(e.error || `HTTP ${r.status}`);
+    (error as Error & { code?: string }).code = e.code;
+    throw error;
   }
   return r.json();
 }
 
-async function del(path: string): Promise<any> {
-  const r = await fetch(`${BASE}${path}`, { method: 'DELETE' });
-  if (!r.ok) {
-    const e = await r.json().catch(() => ({ error: 'Request failed' }));
-    throw new Error(e.error || `HTTP ${r.status}`);
-  }
-  return r.json();
-}
+const get = (path: string): Promise<any> => request(path);
+const post = (path: string, body: unknown): Promise<any> => request(path, { method: 'POST', body: JSON.stringify(body) });
+const del = (path: string): Promise<any> => request(path, { method: 'DELETE' });
+const put = (path: string, body: unknown): Promise<any> => request(path, { method: 'PUT', body: JSON.stringify(body) });
 
 export const api = {
   getCurrent: (params: Record<string, string>): Promise<WeatherData> => {
@@ -53,4 +58,31 @@ export const api = {
   recordHistory: (data: { city: string; country?: string }): Promise<{ success: boolean; searchHistory: HistoryEntry[] }> => post('/history/record', data),
   removeHistory: (id: string): Promise<{ success: boolean }> => del(`/history/${id}`),
   clearHistory: (): Promise<{ success: boolean }> => del('/history'),
+
+  getPremiumForecast: (params: { city?: string; lat?: number; lon?: number; days: number; units: string }): Promise<PremiumForecastData> => {
+    const qs = new URLSearchParams({
+      days: String(params.days),
+      units: params.units,
+      ...(params.lat !== undefined && params.lon !== undefined
+        ? { lat: String(params.lat), lon: String(params.lon) }
+        : { city: params.city || '' }),
+    }).toString();
+    return get(`/premium/forecast?${qs}`);
+  },
+  askAI: (data: { question: string; city?: string; lat?: number; lon?: number; units: string }): Promise<AIAnswer> =>
+    post('/ai/weather', data),
+
+  getPlans: (): Promise<{ plans: Plan[]; currency: string; paymentsConfigured: boolean }> => get('/plans'),
+  getSubscription: (): Promise<Subscription> => get('/subscription'),
+  setDemoPlan: (plan: PlanId): Promise<Subscription> => post('/subscription/demo', { plan, subscriberId: getSubscriberId() }),
+  startCheckout: (plan: PlanId, email: string): Promise<{ authorizationUrl: string; reference: string }> =>
+    post('/billing/checkout', { plan, email, subscriberId: getSubscriberId() }),
+  verifyBilling: (reference: string): Promise<{ success: boolean; subscription: Subscription }> =>
+    get(`/billing/verify?reference=${encodeURIComponent(reference)}&subscriberId=${encodeURIComponent(getSubscriberId())}`),
+
+  getAlertRules: (evaluate = false): Promise<AlertRule[]> => get(`/alerts/rules${evaluate ? '?evaluate=true' : ''}`),
+  createAlertRule: (rule: Omit<AlertRule, 'id' | 'createdAt' | 'enabled'>): Promise<AlertRule> => post('/alerts/rules', rule),
+  updateAlertRule: (id: string, enabled: boolean): Promise<AlertRule> => put(`/alerts/rules/${id}`, { enabled }),
+  removeAlertRule: (id: string): Promise<{ success: boolean }> => del(`/alerts/rules/${id}`),
+  getNotifications: (): Promise<AlertNotification[]> => get('/alerts/notifications'),
 };

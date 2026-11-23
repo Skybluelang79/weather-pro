@@ -18,6 +18,13 @@ import { api } from './services/api';
 import { getWeatherGradient, getWeatherType, generateFaviconSVG } from './services/helpers';
 import TempGraph from './components/TempGraph';
 import WeatherCompare from './components/WeatherCompare';
+import PremiumForecast from './components/PremiumForecast';
+import AIAssistant from './components/AIAssistant';
+import AlertRules from './components/AlertRules';
+import Pricing from './components/Pricing';
+import UpgradeCard from './components/UpgradeCard';
+import { SubscriptionProvider } from './context/SubscriptionContext';
+import { useSubscription } from './context/subscription';
 import type { WeatherData, ForecastData, AirQualityData, Favorite, HistoryEntry } from './types';
 import './App.css';
 
@@ -28,8 +35,15 @@ function getInitialTheme(): string {
   return 'auto';
 }
 
+const TABS = ['weather', 'forecast', 'ai', 'alerts', 'favorites', 'history', 'plans'];
+
+const TAB_ICONS: Record<string, string> = {
+  weather: '☀️', forecast: '📅', ai: '✦', alerts: '🔔', favorites: '❤️', history: '🕐', plans: '👑',
+};
+
 function AppInner() {
   const { addToast } = useToast();
+  const { plan, hasFeature, maxFavorites, maxHistory } = useSubscription();
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
   const [air, setAir] = useState<AirQualityData | null>(null);
@@ -43,6 +57,7 @@ function AppInner() {
   const [theme, setTheme] = useState<string>(getInitialTheme);
   const [showMap, setShowMap] = useState(false);
   const [compareWeather, setCompareWeather] = useState<WeatherData | null>(null);
+  const goToPlans = () => setActiveTab('plans');
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -88,7 +103,6 @@ function AppInner() {
   }, [weather]);
 
   useEffect(() => {
-    const tabs = ['weather', 'forecast', 'favorites', 'history'];
     function handleKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLElement && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
 
@@ -98,8 +112,8 @@ function AppInner() {
       }
 
       const num = parseInt(e.key);
-      if (num >= 1 && num <= 4) {
-        setActiveTab(tabs[num - 1]);
+      if (num >= 1 && num <= TABS.length) {
+        setActiveTab(TABS[num - 1]);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
@@ -185,6 +199,11 @@ function AppInner() {
       await api.removeFavorite(existing.id);
       addToast(`${weather.name} removed from favorites`, 'info');
     } else {
+      if (favorites.length >= maxFavorites) {
+        addToast(`The Basic plan saves up to ${maxFavorites} locations. Upgrade for unlimited favorites.`, 'error');
+        goToPlans();
+        return;
+      }
       await api.addFavorite({ city: weather.name, country: weather.sys.country, lat: weather.coord.lat, lon: weather.coord.lon });
       addToast(`${weather.name} added to favorites`, 'success');
     }
@@ -239,6 +258,10 @@ function AppInner() {
             <span className="logo-text">WeatherPro</span>
           </div>
           <div className="header-actions">
+            <button className="plan-badge-btn" onClick={goToPlans} title="Subscription plans">
+              <span>👑</span>
+              <span>{plan === 'premium' ? 'Premium' : plan === 'pro' ? 'Pro' : 'Free'}</span>
+            </button>
             <button className="theme-btn" onClick={cycleTheme} title={`Theme: ${themeLabel}`}>
               <span>{themeIcon}</span>
             </button>
@@ -270,10 +293,10 @@ function AppInner() {
         )}
 
         <div className="tabs">
-          {['weather', 'forecast', 'favorites', 'history'].map((tab, i) => (
+          {TABS.map((tab, i) => (
             <button key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
-              {tab === 'weather' && '☀️'} {tab === 'forecast' && '📅'} {tab === 'favorites' && '❤️'} {tab === 'history' && '🕐'}
-              <span className="tab-label">{tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
+              {TAB_ICONS[tab]}
+              <span className="tab-label">{tab === 'ai' ? 'AI' : tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
               <span className="tab-shortcut">{i + 1}</span>
             </button>
           ))}
@@ -330,12 +353,65 @@ function AppInner() {
             </>
           )}
 
+          {!loading && activeTab === 'forecast' && weather?.coord && (
+            hasFeature('extendedForecast') ? (
+              <PremiumForecast
+                lat={weather.coord.lat}
+                lon={weather.coord.lon}
+                city={weather.name}
+                unit={unit}
+              />
+            ) : (
+              <UpgradeCard
+                title="14 & 30-Day Advanced Forecasts"
+                description="Unlock hourly rainfall predictions, wind intelligence, 14-day forecasts and lower-confidence 30-day climate trends."
+                requiredPlan="pro"
+                onUpgrade={goToPlans}
+              />
+            )
+          )}
+
+          {activeTab === 'ai' && (
+            weather?.coord ? (
+              <AIAssistant
+                lat={weather.coord.lat}
+                lon={weather.coord.lon}
+                city={weather.name}
+                unit={unit}
+                onUpgrade={goToPlans}
+              />
+            ) : (
+              <div className="empty-hero">
+                <div className="empty-icon">✦</div>
+                <h2>Ask the weather assistant</h2>
+                <p>Search for a city first, then get practical weather guidance.</p>
+              </div>
+            )
+          )}
+
+          {activeTab === 'alerts' && (
+            <AlertRules
+              lat={weather?.coord?.lat}
+              lon={weather?.coord?.lon}
+              city={weather?.name || ''}
+              unit={unit}
+              onUpgrade={goToPlans}
+            />
+          )}
+
+          {activeTab === 'plans' && <Pricing />}
+
           {activeTab === 'favorites' && (
             <Favorites favorites={favorites} onClick={handleFavClick} onRemove={handleRemoveFav} />
           )}
 
           {activeTab === 'history' && (
-            <History history={history} onSearch={handleSearch} onRemove={handleRemoveHistory} onClear={handleClearHistory} />
+            <History history={history.slice(0, maxHistory)} onSearch={handleSearch} onRemove={handleRemoveHistory} onClear={handleClearHistory} />
+          )}
+          {activeTab === 'history' && !hasFeature('weatherHistory') && history.length > maxHistory && (
+            <div className="history-upgrade-note">
+              Showing your {maxHistory} most recent searches. <button onClick={goToPlans}>Unlock full history</button>
+            </div>
           )}
 
           {!loading && activeTab === 'weather' && !weather && !error && (
@@ -383,7 +459,9 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <AppInner />
+        <SubscriptionProvider>
+          <AppInner />
+        </SubscriptionProvider>
       </ToastProvider>
     </ErrorBoundary>
   );

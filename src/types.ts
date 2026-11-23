@@ -124,3 +124,108 @@ export interface HistoryEntry {
 }
 
 export type WeatherType = 'clear' | 'clouds' | 'rain' | 'storm' | 'snow' | 'fog';
+
+export interface PremiumDay {
+  date: string;
+  dayLabel: string;
+  code: number;
+  description: string;
+  icon: string;
+  tempMax: number;
+  tempMin: number;
+  feelsMax: number;
+  feelsMin: number;
+  precipSum: number;
+  precipProbability: number;
+  windSpeed: number;
+  windGust: number;
+  windDeg: number;
+  sunrise: string;
+  sunset: string;
+  uvIndex: number;
+  confidence: 'high' | 'low';
+  source: 'forecast' | 'climate' | 'projection';
+  modeled: boolean;
+}
+
+export interface PremiumHour {
+  time: string;
+  temp: number;
+  feelsLike: number;
+  precipProbability: number;
+  precip: number;
+  humidity: number;
+  code: number;
+  description: string;
+  icon: string;
+  windSpeed: number;
+  windGust: number;
+  windDeg: number;
+}
+
+export interface PremiumForecastData {
+  location: { name: string; country: string; lat: number; lon: number; timezone: string };
+  daily: PremiumDay[];
+  hourly: PremiumHour[];
+  units: 'metric' | 'imperial';
+  generatedAt: number;
+  disclaimer: string;
+}
+
+export interface AIAnswer {
+  answer: string;
+  provider: 'ai' | 'rules';
+  disclaimer: string;
+  fallbackReason?: string;
+  location?: { name: string; country: string };
+}
+
+export type AlertMetric = 'temperature' | 'rain_probability' | 'wind_speed' | 'air_quality';
+
+export interface AlertRule {
+  id: string;
+  city: string;
+  lat: number;
+  lon: number;
+  metric: AlertMetric;
+  operator: 'above' | 'below';
+  threshold: number;
+  leadMinutes: number;
+  channels: string[];
+  units: 'metric' | 'imperial';
+  enabled: boolean;
+  createdAt: number;
+  triggered?: boolean;
+  value?: number | null;
+  reason?: string;
+}
+
+export interface AlertNotification {
+  id: string;
+  key: string;
+  ruleId: string;
+  city: string;
+  metric: string;
+  message: string;
+  channels: string[];
+  createdAt: number;
+}
+
+export type PlanId = 'free' | 'pro' | 'premium';
+
+export interface Plan {
+  id: PlanId;
+  name: string;
+  price: number;
+  currency: string;
+  tagline: string;
+  features: string[];
+  featured?: boolean;
+}
+
+export interface Subscription {
+  plan: PlanId;
+  status: string;
+  source: 'free' | 'demo' | 'paystack';
+  since: number | null;
+}
