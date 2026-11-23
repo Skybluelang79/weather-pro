@@ -21,6 +21,7 @@ import WeatherCompare from './components/WeatherCompare';
 import PremiumForecast from './components/PremiumForecast';
 import AIAssistant from './components/AIAssistant';
 import AlertRules from './components/AlertRules';
+import WeatherMap from './components/WeatherMap';
 import Pricing from './components/Pricing';
 import UpgradeCard from './components/UpgradeCard';
 import { SubscriptionProvider } from './context/SubscriptionContext';
@@ -35,10 +36,10 @@ function getInitialTheme(): string {
   return 'auto';
 }
 
-const TABS = ['weather', 'forecast', 'ai', 'alerts', 'favorites', 'history', 'plans'];
+const TABS = ['weather', 'forecast', 'maps', 'ai', 'alerts', 'favorites', 'history', 'plans'];
 
 const TAB_ICONS: Record<string, string> = {
-  weather: '☀️', forecast: '📅', ai: '✦', alerts: '🔔', favorites: '❤️', history: '🕐', plans: '👑',
+  weather: '☀️', forecast: '📅', maps: '🗺️', ai: '✦', alerts: '🔔', favorites: '❤️', history: '🕐', plans: '👑',
 };
 
 function AppInner() {
@@ -369,6 +370,15 @@ function AppInner() {
                 onUpgrade={goToPlans}
               />
             )
+          )}
+
+          {activeTab === 'maps' && (
+            <WeatherMap
+              lat={weather?.coord?.lat}
+              lon={weather?.coord?.lon}
+              city={weather?.name || ''}
+              onUpgrade={goToPlans}
+            />
           )}
 
           {activeTab === 'ai' && (

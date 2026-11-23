@@ -1,4 +1,4 @@
-const CACHE_NAME = 'weatherpro-v2';
+const CACHE_NAME = 'weatherpro-v3';
 const PRECACHE = ['/', '/index.html'];
 
 self.addEventListener('install', (e) => {
@@ -29,7 +29,8 @@ self.addEventListener('fetch', (e) => {
   const request = e.request;
 
   // API: stale-while-revalidate
-  if (url.pathname.startsWith('/api/')) {
+  const liveApi = ['/api/alerts', '/api/subscription', '/api/billing'];
+  if (url.pathname.startsWith('/api/') && !liveApi.some(prefix => url.pathname.startsWith(prefix))) {
     e.respondWith(swr(request));
     return;
   }
@@ -68,3 +69,39 @@ function networkFirst(request) {
       .catch(() => cache.match(request))
   );
 }
+
+self.addEventListener('push', (e) => {
+  let payload = {};
+  try {
+    payload = e.data ? e.data.json() : {};
+  } catch {
+    payload = { body: e.data ? e.data.text() : 'A weather alert was triggered.' };
+  }
+
+  const title = payload.title || 'WeatherPro alert';
+  const options = {
+    body: payload.body || 'A weather alert was triggered.',
+    icon: '/icon-192.png',
+    badge: '/icon-192.png',
+    tag: payload.tag || 'weatherpro-alert',
+    data: { url: payload.url || '/' },
+  };
+
+  e.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const url = e.notification.data?.url || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if (new URL(client.url).pathname === new URL(url, self.location.origin).pathname && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+      return undefined;
+    })
+  );
+});

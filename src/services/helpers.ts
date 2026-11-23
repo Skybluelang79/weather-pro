@@ -78,6 +78,13 @@ export function generateFaviconSVG(iconCode: string): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><text x="32" y="44" font-size="40" text-anchor="middle">${emoji}</text></svg>`;
 }
 
+export function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from(raw, char => char.charCodeAt(0));
+}
+
 export function getAQILevel(aqi: number): { label: string; color: string; desc: string } {
   const levels = [
     { label: 'Good', color: '#4ADE80', desc: 'Air quality is satisfactory' },

@@ -3,7 +3,8 @@ import { api } from '../services/api';
 import { useSubscription } from '../context/subscription';
 import { useToast } from './Toast';
 import UpgradeCard from './UpgradeCard';
-import type { AlertMetric, AlertNotification, AlertRule } from '../types';
+import { urlBase64ToUint8Array } from '../services/helpers';
+import type { AlertChannels, AlertMetric, AlertNotification, AlertRule } from '../types';
 
 interface AlertRulesProps {
   lat?: number;
@@ -32,6 +33,8 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
   const [threshold, setThreshold] = useState('70');
   const [leadMinutes, setLeadMinutes] = useState('60');
   const [channel, setChannel] = useState('in-app');
+  const [channels, setChannels] = useState<AlertChannels | null>(null);
+  const [pushBusy, setPushBusy] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,8 +54,40 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
   }, []);
 
   useEffect(() => {
-    if (hasFeature('customAlerts')) load().catch(() => {});
+    if (!hasFeature('customAlerts')) return;
+    load().catch(() => {});
+    api.getAlertChannels().then(setChannels).catch(() => setChannels(null));
   }, [hasFeature, load]);
+
+  const enablePush = async () => {
+    if (!channels?.push || !channels.pushPublicKey) {
+      addToast('Push notifications are not configured', 'error');
+      return;
+    }
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      addToast('This browser does not support push notifications', 'error');
+      return;
+    }
+    setPushBusy(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        addToast('Notification permission was denied', 'error');
+        return;
+      }
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(channels.pushPublicKey) as BufferSource,
+      });
+      await api.savePushSubscription(subscription.toJSON());
+      addToast('Push alerts enabled', 'success');
+    } catch (err) {
+      addToast((err as Error).message || 'Could not enable push alerts', 'error');
+    } finally {
+      setPushBusy(false);
+    }
+  };
 
   if (!hasFeature('customAlerts')) {
     return (
@@ -143,16 +178,23 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
             <span>Deliver via</span>
             <select value={channel} onChange={e => setChannel(e.target.value)}>
               <option value="in-app">In-app</option>
-              <option value="email">Email</option>
-              <option value="push">Push</option>
-              <option value="sms">SMS</option>
+              <option value="email" disabled={!channels?.email}>Email{channels && !channels.email ? ' (not configured)' : ''}</option>
+              <option value="push" disabled={!channels?.push}>Push{channels && !channels.push ? ' (not configured)' : ''}</option>
+              <option value="sms" disabled={!channels?.sms}>SMS{channels && !channels.sms ? ' (not configured)' : ''}</option>
             </select>
           </label>
           <button className="alert-create" type="submit">Create alert</button>
         </form>
-        <p className="premium-disclaimer">
-          In-app delivery is live. Email, push and SMS are recorded on the rule and forwarded when a notification webhook is configured.
-        </p>
+        <div className="alert-delivery">
+          {channels?.push && (
+            <button className="push-enable" onClick={enablePush} disabled={pushBusy}>
+              {pushBusy ? 'Enabling…' : 'Enable browser notifications'}
+            </button>
+          )}
+          <p className="premium-disclaimer">
+            In-app alerts are always on. Email, SMS and push require the matching provider keys; webhook forwarding works independently.
+          </p>
+        </div>
       </div>
 
       <div className="glass-panel alerts-section">
@@ -191,6 +233,11 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
                   <strong>{notification.city}</strong>
                   <p>{notification.message}</p>
                   <span className="notification-meta">{new Date(notification.createdAt).toLocaleString()} · {notification.channels.join(', ')}</span>
+                  {notification.delivery && Object.keys(notification.delivery).length > 0 && (
+                    <span className="notification-delivery">
+                      {Object.entries(notification.delivery).map(([provider, status]) => `${provider}: ${status}`).join(' · ')}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}

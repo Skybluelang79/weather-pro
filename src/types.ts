@@ -209,6 +209,7 @@ export interface AlertNotification {
   message: string;
   channels: string[];
   createdAt: number;
+  delivery?: AlertDelivery;
 }
 
 export type PlanId = 'free' | 'pro' | 'premium';
@@ -228,4 +229,31 @@ export interface Subscription {
   status: string;
   source: 'free' | 'demo' | 'paystack';
   since: number | null;
+}
+
+export interface RadarFrame {
+  time: number;
+  path: string;
+}
+
+export interface WeatherMapsData {
+  host: string;
+  generatedAt: number;
+  radar: { past: RadarFrame[]; nowcast: RadarFrame[] };
+  satellite: { infrared: RadarFrame[] };
+}
+
+export interface AlertChannels {
+  email: boolean;
+  sms: boolean;
+  push: boolean;
+  webhook: boolean;
+  pushPublicKey: string | null;
+}
+
+export interface AlertDelivery {
+  email?: string;
+  sms?: string;
+  push?: string;
+  webhook?: string;
 }

@@ -6,6 +6,7 @@ import {
   getWindDirection,
   getAQILevel,
   formatTime,
+  urlBase64ToUint8Array,
 } from '../services/helpers'
 
 describe('getWeatherIcon', () => {
@@ -87,5 +88,11 @@ describe('formatTime', () => {
   it('formats time from unix timestamp and timezone offset', () => {
     const result = formatTime(7200, 0)
     expect(result).toMatch(/^\d{2}:\d{2}$/)
+  })
+})
+
+describe('urlBase64ToUint8Array', () => {
+  it('decodes base64url keys', () => {
+    expect(Array.from(urlBase64ToUint8Array('AQID'))).toEqual([1, 2, 3])
   })
 })

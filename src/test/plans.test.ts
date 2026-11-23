@@ -5,6 +5,7 @@ describe('subscription entitlements', () => {
   it('keeps the free plan on basic features', () => {
     expect(hasFeature('free', 'extendedForecast')).toBe(false);
     expect(hasFeature('free', 'aiAssistant')).toBe(false);
+    expect(hasFeature('free', 'weatherMaps')).toBe(false);
     expect(maxForecastDays('free')).toBe(3);
     expect(maxFavorites('free')).toBe(3);
     expect(maxHistory('free')).toBe(5);
@@ -13,6 +14,7 @@ describe('subscription entitlements', () => {
   it('unlocks pro features without climate analytics', () => {
     expect(hasFeature('pro', 'aiAssistant')).toBe(true);
     expect(hasFeature('pro', 'customAlerts')).toBe(true);
+    expect(hasFeature('pro', 'weatherMaps')).toBe(true);
     expect(hasFeature('pro', 'climateAnalytics')).toBe(false);
     expect(maxForecastDays('pro')).toBe(14);
     expect(maxFavorites('pro')).toBe(Infinity);

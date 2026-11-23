@@ -10,7 +10,8 @@ export type PremiumFeature =
   | 'weatherHistory'
   | 'climateAnalytics'
   | 'adFree'
-  | 'multiCityCompare';
+  | 'multiCityCompare'
+  | 'weatherMaps';
 
 export const PLANS: Plan[] = [
   {
@@ -39,6 +40,7 @@ export const PLANS: Plan[] = [
       '14-day forecast',
       'Hourly rainfall predictions',
       'Wind intelligence',
+      'Advanced radar & map layers',
       'AI weather assistant',
       'Unlimited saved locations',
       'Personalized custom alerts',
@@ -69,6 +71,7 @@ const FEATURE_MATRIX: Record<PlanId, PremiumFeature[]> = {
     'extendedForecast',
     'hourlyRain',
     'windIntelligence',
+    'weatherMaps',
     'aiAssistant',
     'customAlerts',
     'unlimitedLocations',
@@ -80,6 +83,7 @@ const FEATURE_MATRIX: Record<PlanId, PremiumFeature[]> = {
     'extendedForecast',
     'hourlyRain',
     'windIntelligence',
+    'weatherMaps',
     'aiAssistant',
     'customAlerts',
     'unlimitedLocations',

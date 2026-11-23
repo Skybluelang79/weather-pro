@@ -3,6 +3,7 @@ import cors from 'cors';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
 import { createHmac } from 'crypto';
+import { sendNotification, setVapidDetails } from 'web-push';
 import { loadData, saveData } from './storage.js';
 import { generateAIAnswer, evaluateRule, weatherCodeInfo, DISCLAIMER } from './intelligence.js';
 import { PLANS, PLAN_IDS, getPlan } from './plans.js';
@@ -18,6 +19,19 @@ const OPEN_METEO_GEO = 'https://geocoding-api.open-meteo.com/v1/search';
 const OPEN_METEO_ARCHIVE = 'https://archive-api.open-meteo.com/v1/archive';
 const PAYSTACK_BASE = 'https://api.paystack.co';
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
+const RAINVIEWER_MAPS = 'https://api.rainviewer.com/public/weather-maps.json';
+const OWM_MAP_BASE = 'https://tile.openweathermap.org/map';
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const ALERT_EMAIL_FROM = process.env.ALERT_EMAIL_FROM || 'WeatherPro <alerts@weatherpro.app>';
+const ALERT_EMAIL_TO = process.env.ALERT_EMAIL_TO;
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_FROM_NUMBER = process.env.TWILIO_FROM_NUMBER;
+const ALERT_SMS_TO = process.env.ALERT_SMS_TO;
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || 'mailto:admin@example.com';
+const NOTIFICATION_WEBHOOK_URL = process.env.NOTIFICATION_WEBHOOK_URL;
 
 const DEFAULT_TTL = {
   weather: 10 * 60 * 1000,
@@ -32,6 +46,7 @@ if (CACHE_TTL_MS > 0) {
 }
 
 const fetchCache = new Map();
+const tileCache = new Map();
 
 function cacheGet(key) {
   const hit = fetchCache.get(key);
@@ -105,6 +120,7 @@ const searchHistory = [];
 const alertRules = [];
 const notifications = [];
 const subscriptions = {};
+const pushSubscriptions = [];
 let initPromise = null;
 
 function ensureInitialized() {
@@ -115,6 +131,7 @@ function ensureInitialized() {
       alertRules.push(...(data.alertRules || []));
       notifications.push(...(data.notifications || []));
       Object.assign(subscriptions, data.subscriptions || {});
+      pushSubscriptions.push(...(data.pushSubscriptions || []));
     }).catch((e) => console.error('Failed to load persisted state:', e.message));
   }
   return initPromise;
@@ -125,7 +142,7 @@ function genId() {
 }
 
 async function persist() {
-  await saveData({ favorites, searchHistory, alertRules, notifications, subscriptions });
+  await saveData({ favorites, searchHistory, alertRules, notifications, subscriptions, pushSubscriptions });
 }
 
 function subscriberFrom(req) {
@@ -663,9 +680,155 @@ app.post('/api/billing/webhook', async (req, res) => {
   }
 });
 
+app.get('/api/maps', async (_req, res) => {
+  try {
+    const data = await fetchJson(RAINVIEWER_MAPS, { ttl: 10 * 60 * 1000 });
+    res.json({
+      host: data.host || 'https://tilecache.rainviewer.com',
+      generatedAt: data.generated || Date.now(),
+      radar: { past: data.radar?.past || [], nowcast: data.radar?.nowcast || [] },
+      satellite: { infrared: data.satellite?.infrared || [] },
+    });
+  } catch (err) {
+    res.status(502).json({ error: err.message || 'Could not load map metadata' });
+  }
+});
+
+const TILE_LAYERS = {
+  temperature: 'temp_new',
+  wind: 'wind_new',
+  precipitation: 'precipitation_new',
+  clouds: 'clouds_new',
+  air: 'pollution_new',
+};
+
+app.get('/api/tiles/:layer/:z/:x/:y', async (req, res) => {
+  const layer = TILE_LAYERS[req.params.layer];
+  const z = Number(req.params.z);
+  const x = Number(req.params.x);
+  const y = Number(req.params.y);
+  const limit = 2 ** z;
+  if (!layer) return res.status(400).json({ error: 'Unknown map layer' });
+  if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > 18 || x < 0 || y < 0 || x >= limit || y >= limit) {
+    return res.status(400).json({ error: 'Invalid tile coordinates' });
+  }
+  if (!API_KEY) return res.status(503).json({ error: 'Map tiles are not configured' });
+
+  const key = `${layer}/${z}/${x}/${y}`;
+  const cached = tileCache.get(key);
+  if (cached && cached.expires > Date.now()) {
+    return res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=600').send(cached.buffer);
+  }
+
+  try {
+    const response = await fetch(`${OWM_MAP_BASE}/${layer}/${z}/${x}/${y}.png?appid=${API_KEY}`);
+    if (!response.ok) return res.status(response.status === 404 ? 404 : 502).json({ error: 'Map tile unavailable' });
+    const buffer = Buffer.from(await response.arrayBuffer());
+    tileCache.set(key, { buffer, expires: Date.now() + 10 * 60 * 1000 });
+    if (tileCache.size > 500) tileCache.delete(tileCache.keys().next().value);
+    return res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=600').send(buffer);
+  } catch (err) {
+    return res.status(502).json({ error: err.message || 'Map tile unavailable' });
+  }
+});
+
 const ALERT_METRICS = ['temperature', 'rain_probability', 'wind_speed', 'air_quality'];
 
-function recordNotification(rule, evaluation) {
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+}
+
+function alertChannels() {
+  return {
+    email: Boolean(RESEND_API_KEY && ALERT_EMAIL_TO),
+    sms: Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER && ALERT_SMS_TO),
+    push: Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
+    webhook: Boolean(NOTIFICATION_WEBHOOK_URL),
+    pushPublicKey: VAPID_PUBLIC_KEY || null,
+  };
+}
+
+async function deliverNotification(notification, rule) {
+  const results = {};
+  const channels = rule.channels || ['in-app'];
+  const configured = alertChannels();
+
+  if (channels.includes('email') && configured.email) {
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: ALERT_EMAIL_FROM,
+          to: ALERT_EMAIL_TO.split(',').map(value => value.trim()).filter(Boolean),
+          subject: `WeatherPro alert: ${notification.city}`,
+          html: `<p>${escapeHtml(notification.message)}</p><p>Rule: ${escapeHtml(rule.metric)} ${rule.operator} ${escapeHtml(rule.threshold)}</p>`,
+        }),
+      });
+      results.email = response.ok ? 'sent' : `failed (HTTP ${response.status})`;
+    } catch (err) {
+      results.email = `failed (${err.message})`;
+    }
+  }
+
+  if (channels.includes('sms') && configured.sms) {
+    try {
+      const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64');
+      const body = new URLSearchParams({
+        To: ALERT_SMS_TO,
+        From: TWILIO_FROM_NUMBER,
+        Body: `${notification.message} — WeatherPro alert`,
+      });
+      const response = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`, {
+        method: 'POST',
+        headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+      });
+      results.sms = response.ok ? 'sent' : `failed (HTTP ${response.status})`;
+    } catch (err) {
+      results.sms = `failed (${err.message})`;
+    }
+  }
+
+  if (channels.includes('push') && configured.push && pushSubscriptions.length) {
+    setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    const payload = JSON.stringify({
+      title: `WeatherPro alert · ${notification.city}`,
+      body: notification.message,
+      url: '/',
+    });
+    const outcomes = await Promise.allSettled(pushSubscriptions.map(subscription => sendNotification(subscription, payload)));
+    const sent = outcomes.filter(outcome => outcome.status === 'fulfilled').length;
+    results.push = `${sent}/${outcomes.length} sent`;
+    const stale = outcomes
+      .map((outcome, index) => (outcome.status === 'rejected' && [404, 410].includes(outcome.reason?.statusCode) ? pushSubscriptions[index].endpoint : null))
+      .filter(Boolean);
+    if (stale.length) {
+      for (const endpoint of stale) {
+        const index = pushSubscriptions.findIndex(subscription => subscription.endpoint === endpoint);
+        if (index >= 0) pushSubscriptions.splice(index, 1);
+      }
+      persist().catch(() => {});
+    }
+  }
+
+  if (configured.webhook) {
+    try {
+      const response = await fetch(NOTIFICATION_WEBHOOK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...notification, delivery: results }),
+      });
+      results.webhook = response.ok ? 'sent' : `failed (HTTP ${response.status})`;
+    } catch {
+      results.webhook = 'failed';
+    }
+  }
+
+  return results;
+}
+
+async function recordNotification(rule, evaluation) {
   const day = new Date().toISOString().slice(0, 10);
   const key = `${rule.id}:${day}:${rule.metric}`;
   if (notifications.some(n => n.key === key)) return;
@@ -678,17 +841,12 @@ function recordNotification(rule, evaluation) {
     message: `${rule.city || 'Your location'}: ${evaluation.reason}`,
     channels: rule.channels || ['in-app'],
     createdAt: Date.now(),
+    delivery: {},
   };
   notifications.unshift(notification);
   if (notifications.length > 100) notifications.pop();
+  notification.delivery = await deliverNotification(notification, rule);
   persist().catch(e => console.error('Failed to persist notification:', e.message));
-  if (process.env.NOTIFICATION_WEBHOOK_URL) {
-    fetch(process.env.NOTIFICATION_WEBHOOK_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(notification),
-    }).catch(() => {});
-  }
 }
 
 async function evaluatedRules() {
@@ -720,7 +878,7 @@ async function evaluatedRules() {
     for (const rule of rules) {
       const evaluation = evaluateRule(rule, forecast, air);
       results.set(rule.id, { ...rule, ...evaluation });
-      if (evaluation.triggered) recordNotification(rule, evaluation);
+      if (evaluation.triggered) await recordNotification(rule, evaluation);
     }
   }
   return alertRules.map(rule => results.get(rule.id) || { ...rule, triggered: false, value: null, reason: 'Rule is paused' });
@@ -787,6 +945,34 @@ app.delete('/api/alerts/rules/:id', async (req, res) => {
 app.get('/api/alerts/notifications', async (_req, res) => {
   await ensureInitialized();
   res.json(notifications.slice(0, 20));
+});
+
+app.get('/api/alerts/channels', async (_req, res) => {
+  res.json(alertChannels());
+});
+
+app.post('/api/alerts/push-subscription', async (req, res) => {
+  try {
+    await ensureInitialized();
+    const subscription = req.body?.subscription;
+    if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+      return res.status(400).json({ error: 'Invalid push subscription' });
+    }
+    if (!alertChannels().push) return res.status(503).json({ error: 'Push notifications are not configured' });
+    const record = {
+      endpoint: String(subscription.endpoint),
+      keys: { p256dh: String(subscription.keys.p256dh), auth: String(subscription.keys.auth) },
+      expirationTime: subscription.expirationTime || null,
+    };
+    const index = pushSubscriptions.findIndex(item => item.endpoint === record.endpoint);
+    if (index >= 0) pushSubscriptions[index] = record;
+    else pushSubscriptions.push(record);
+    if (pushSubscriptions.length > 500) pushSubscriptions.shift();
+    await persist();
+    return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: err.message || 'Could not save push subscription' });
+  }
 });
 
 export default app;

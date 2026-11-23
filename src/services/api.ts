@@ -1,6 +1,7 @@
 import type {
   WeatherData, ForecastData, AirQualityData, AlertData, GeoLocation, Favorite, HistoryEntry,
   PremiumForecastData, AIAnswer, Plan, Subscription, AlertRule, AlertNotification, PlanId,
+  WeatherMapsData, AlertChannels,
 } from '../types';
 
 const BASE = '/api';
@@ -85,4 +86,9 @@ export const api = {
   updateAlertRule: (id: string, enabled: boolean): Promise<AlertRule> => put(`/alerts/rules/${id}`, { enabled }),
   removeAlertRule: (id: string): Promise<{ success: boolean }> => del(`/alerts/rules/${id}`),
   getNotifications: (): Promise<AlertNotification[]> => get('/alerts/notifications'),
+  getAlertChannels: (): Promise<AlertChannels> => get('/alerts/channels'),
+  savePushSubscription: (subscription: PushSubscriptionJSON): Promise<{ success: boolean }> =>
+    post('/alerts/push-subscription', { subscription }),
+
+  getWeatherMaps: (): Promise<WeatherMapsData> => get('/maps'),
 };
