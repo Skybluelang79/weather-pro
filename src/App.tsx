@@ -24,6 +24,9 @@ import AlertRules from './components/AlertRules';
 import WeatherMap from './components/WeatherMap';
 import Pricing from './components/Pricing';
 import UpgradeCard from './components/UpgradeCard';
+import AuthModal from './components/AuthModal';
+import { AuthProvider } from './context/AuthContext';
+import { useAuth } from './context/auth';
 import { SubscriptionProvider } from './context/SubscriptionContext';
 import { useSubscription } from './context/subscription';
 import type { WeatherData, ForecastData, AirQualityData, Favorite, HistoryEntry } from './types';
@@ -44,6 +47,7 @@ const TAB_ICONS: Record<string, string> = {
 
 function AppInner() {
   const { addToast } = useToast();
+  const { user, logout } = useAuth();
   const { plan, hasFeature, maxFavorites, maxHistory, loading: subscriptionLoading } = useSubscription();
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
@@ -57,9 +61,18 @@ function AppInner() {
   const [loaded, setLoaded] = useState(false);
   const [theme, setTheme] = useState<string>(getInitialTheme);
   const [showMap, setShowMap] = useState(false);
+  const [authOpen, setAuthOpen] = useState(false);
   const [compareWeather, setCompareWeather] = useState<WeatherData | null>(null);
   const requestId = useRef(0);
   const goToPlans = () => setActiveTab('plans');
+  const handleLogout = async () => {
+    try {
+      await logout();
+      addToast('Signed out', 'info');
+    } catch {
+      addToast('Could not sign out', 'error');
+    }
+  };
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
@@ -296,6 +309,14 @@ function AppInner() {
               <span>👑</span>
               <span>{plan === 'premium' ? 'Premium' : plan === 'pro' ? 'Pro' : 'Free'}</span>
             </button>
+            {user ? (
+              <div className="auth-user">
+                <span className="auth-user-name" title={user.email}>{user.name}</span>
+                <button className="auth-logout" onClick={handleLogout}>Log out</button>
+              </div>
+            ) : (
+              <button className="auth-open" onClick={() => setAuthOpen(true)}>Sign in</button>
+            )}
             <button className="theme-btn" onClick={cycleTheme} title={`Theme: ${themeLabel}`}>
               <span>{themeIcon}</span>
             </button>
@@ -511,6 +532,7 @@ function AppInner() {
           onPick={handlePickLocation}
           loading={loading}
         />
+        <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
       </div>
     </div>
   );
@@ -520,9 +542,11 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <SubscriptionProvider>
-          <AppInner />
-        </SubscriptionProvider>
+        <AuthProvider>
+          <SubscriptionProvider>
+            <AppInner />
+          </SubscriptionProvider>
+        </AuthProvider>
       </ToastProvider>
     </ErrorBoundary>
   );

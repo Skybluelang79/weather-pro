@@ -67,7 +67,7 @@ netlify env:set PAYSTACK_SECRET_KEY sk_live_xxxx --site 1c5a07ef-fa98-4e7d-9bc9-
 
 Without `PAYSTACK_SECRET_KEY`, `/api/plans` reports `paymentsConfigured: false` and checkout falls back to local demo upgrades. When a Paystack key is present, `/api/subscription/demo` is disabled unless `ALLOW_DEMO_UPGRADES=true`.
 
-Subscriber identity is an HTTP-only signed cookie issued by the API; client-supplied subscriber IDs are ignored. PRO endpoints are also enforced server-side: extended forecast (14 days), maps, AI assistant, custom alerts, full history, and unlimited favorites return `403 UPGRADE_REQUIRED` for Basic users. Premium raises the extended forecast cap to 30 days and adds climate analytics.
+Subscriber identity is an HTTP-only signed cookie issued by the API; client-supplied subscriber IDs are ignored. Sign-up and sign-in are available from the header: passwords are hashed with scrypt, accounts map to a stable subscriber ID, and the signed user cookie is cleared on logout. PRO endpoints are also enforced server-side: extended forecast (14 days), maps, AI assistant, custom alerts, full history, and unlimited favorites return `403 UPGRADE_REQUIRED` for Basic users. Premium raises the extended forecast cap to 30 days and adds climate analytics.
 
 ## Scripts
 

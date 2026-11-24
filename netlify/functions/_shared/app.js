@@ -2,13 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { sendNotification, setVapidDetails } from 'web-push';
 import { loadData, saveData } from './storage.js';
 import { generateAIAnswer, evaluateRule, weatherCodeInfo, DISCLAIMER } from './intelligence.js';
 import { PLANS, PLAN_IDS, getPlan } from './plans.js';
 import {
   sessionMiddleware,
+  setAuthCookies,
+  clearAuthCookies,
+  createUserId,
+  createSubscriberId,
   activeSubscription,
   hasEntitlement,
   maxFavoritesFor,
@@ -139,6 +143,7 @@ const notifications = [];
 const subscriptions = {};
 const pushSubscriptions = [];
 const processedEvents = new Set();
+const users = [];
 let initPromise = null;
 
 function ensureInitialized() {
@@ -150,6 +155,7 @@ function ensureInitialized() {
       notifications.push(...(data.notifications || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
       pushSubscriptions.push(...(data.pushSubscriptions || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
       Object.assign(subscriptions, data.subscriptions || {});
+      users.push(...(data.users || []));
       for (const id of data.processedEvents || []) processedEvents.add(String(id));
     }).catch((e) => console.error('Failed to load persisted state:', e.message));
   }
@@ -169,11 +175,32 @@ async function persist() {
     subscriptions,
     pushSubscriptions,
     processedEvents: [...processedEvents],
+    users,
   });
 }
 
 function subscriberFrom(req) {
   return req.subscriberId || 'anonymous';
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function hashPassword(password, salt = randomBytes(16).toString('hex')) {
+  return { salt, hash: scryptSync(password, salt, 64).toString('hex') };
+}
+
+function passwordMatches(password, user) {
+  const expected = Buffer.from(user.passwordHash || '', 'hex');
+  const actual = Buffer.from(hashPassword(password, user.salt).hash, 'hex');
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+function publicUser(user) {
+  return { id: user.id, email: user.email, name: user.name, createdAt: user.createdAt };
 }
 
 function owned(collection, owner) {
@@ -657,6 +684,67 @@ function setSubscription(subscriberId, plan, source, ttlMs) {
     expiresAt: ttlMs ? Date.now() + ttlMs : null,
   };
 }
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    await ensureInitialized();
+    const email = normalizeEmail(req.body?.email);
+    const password = String(req.body?.password || '');
+    const name = String(req.body?.name || '').trim().slice(0, 80);
+    if (!EMAIL_PATTERN.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (password.length < 8 || password.length > 128) return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+    if (users.some(user => user.email === email)) return res.status(409).json({ error: 'An account with that email already exists.' });
+
+    const { salt, hash } = hashPassword(password);
+    const user = {
+      id: createUserId(),
+      email,
+      name: name || email.split('@')[0],
+      salt,
+      passwordHash: hash,
+      subscriberId: createSubscriberId(),
+      createdAt: Date.now(),
+    };
+    users.push(user);
+    await persist();
+    setAuthCookies(res, user.subscriberId, user.id);
+    res.status(201).json({ user: publicUser(user), subscription: getSubscription(user.subscriberId) });
+  } catch (err) {
+    console.error('Registration failed:', err.message);
+    res.status(500).json({ error: 'Could not create account.' });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    await ensureInitialized();
+    const email = normalizeEmail(req.body?.email);
+    const password = String(req.body?.password || '');
+    const user = users.find(record => record.email === email);
+    if (!user || !passwordMatches(password, user)) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
+    setAuthCookies(res, user.subscriberId, user.id);
+    res.json({ user: publicUser(user), subscription: getSubscription(user.subscriberId) });
+  } catch (err) {
+    console.error('Login failed:', err.message);
+    res.status(500).json({ error: 'Could not sign in.' });
+  }
+});
+
+app.post('/api/auth/logout', (_req, res) => {
+  clearAuthCookies(res);
+  res.json({ success: true });
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  await ensureInitialized();
+  const user = users.find(record => record.id === req.userId);
+  res.json({
+    user: user ? publicUser(user) : null,
+    subscription: getSubscription(user?.subscriberId || subscriberFrom(req)),
+  });
+});
 
 app.get('/api/plans', (_req, res) => {
   res.json({ plans: Object.values(PLANS), currency: 'NGN', paymentsConfigured: Boolean(PAYSTACK_SECRET_KEY) });

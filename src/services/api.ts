@@ -1,7 +1,7 @@
 import type {
   WeatherData, ForecastData, AirQualityData, AlertData, GeoLocation, Favorite, HistoryEntry,
   PremiumForecastData, AIAnswer, Plan, Subscription, AlertRule, AlertNotification, PlanId,
-  WeatherMapsData, AlertChannels,
+  WeatherMapsData, AlertChannels, AuthUser,
 } from '../types';
 
 const BASE = '/api';
@@ -30,6 +30,13 @@ const del = (path: string): Promise<any> => request(path, { method: 'DELETE' });
 const put = (path: string, body: unknown): Promise<any> => request(path, { method: 'PUT', body: JSON.stringify(body) });
 
 export const api = {
+  signup: (data: { name: string; email: string; password: string }): Promise<{ user: AuthUser; subscription: Subscription }> =>
+    post('/auth/register', data),
+  login: (data: { email: string; password: string }): Promise<{ user: AuthUser; subscription: Subscription }> =>
+    post('/auth/login', data),
+  logout: (): Promise<{ success: boolean }> => post('/auth/logout', {}),
+  getAuthMe: (): Promise<{ user: AuthUser | null; subscription: Subscription }> => get('/auth/me'),
+
   getCurrent: (params: Record<string, string>): Promise<WeatherData> => {
     const qs = new URLSearchParams(params).toString();
     return get(`/weather/current?${qs}`);

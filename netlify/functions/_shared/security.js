@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
 export const SESSION_COOKIE = 'weatherpro_sid';
+export const USER_COOKIE = 'weatherpro_user';
 const COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 const FREE_SUBSCRIPTION = { plan: 'free', status: 'active', source: 'free', since: null, expiresAt: null };
 
@@ -28,13 +29,17 @@ export function createSubscriberId() {
   return `sub_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`;
 }
 
-export function signSubscriberId(id) {
-  const value = String(id);
-  const signature = createHmac('sha256', sessionSecret()).update(value).digest('base64url');
-  return `${value}.${signature}`;
+export function createUserId() {
+  return `usr_${Date.now().toString(36)}_${randomBytes(8).toString('hex')}`;
 }
 
-export function verifySignedSubscriberId(token) {
+function signValue(value) {
+  const text = String(value);
+  const signature = createHmac('sha256', sessionSecret()).update(text).digest('base64url');
+  return `${text}.${signature}`;
+}
+
+function verifySignedValue(token) {
   if (typeof token !== 'string' || !token) return null;
   const separator = token.lastIndexOf('.');
   if (separator <= 0) return null;
@@ -50,6 +55,24 @@ export function verifySignedSubscriberId(token) {
   return timingSafeEqual(actualBuffer, expectedBuffer) ? id : null;
 }
 
+export function signSubscriberId(id) {
+  return signValue(id);
+}
+
+export function verifySignedSubscriberId(token) {
+  const id = verifySignedValue(token);
+  return id?.startsWith('sub_') ? id : null;
+}
+
+export function signUserId(id) {
+  return signValue(id);
+}
+
+export function verifySignedUserId(token) {
+  const id = verifySignedValue(token);
+  return id?.startsWith('usr_') ? id : null;
+}
+
 function readCookie(req, name) {
   const header = req?.headers?.cookie;
   if (!header) return null;
@@ -63,18 +86,43 @@ function readCookie(req, name) {
   return null;
 }
 
+function cookieFlags(maxAge) {
+  const secure = process.env.NODE_ENV === 'production' || process.env.NETLIFY === 'true' ? '; Secure' : '';
+  return `Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Lax${secure}`;
+}
+
+export function setAuthCookies(res, subscriberId, userId) {
+  res.removeHeader('Set-Cookie');
+  const cookies = [
+    `${SESSION_COOKIE}=${encodeURIComponent(signSubscriberId(subscriberId))}; ${cookieFlags(COOKIE_MAX_AGE)}`,
+  ];
+  if (userId) {
+    cookies.push(`${USER_COOKIE}=${encodeURIComponent(signUserId(userId))}; ${cookieFlags(COOKIE_MAX_AGE)}`);
+  }
+  res.setHeader('Set-Cookie', cookies);
+}
+
+export function clearAuthCookies(res) {
+  res.removeHeader('Set-Cookie');
+  res.setHeader('Set-Cookie', [
+    `${SESSION_COOKIE}=; ${cookieFlags(0)}`,
+    `${USER_COOKIE}=; ${cookieFlags(0)}`,
+  ]);
+}
+
 export function sessionMiddleware(req, res, next) {
   const existing = verifySignedSubscriberId(readCookie(req, SESSION_COOKIE));
   if (existing) {
     req.subscriberId = existing;
+    req.userId = verifySignedUserId(readCookie(req, USER_COOKIE));
     next();
     return;
   }
 
   const id = createSubscriberId();
   req.subscriberId = id;
-  const secure = process.env.NODE_ENV === 'production' || process.env.NETLIFY === 'true' ? '; Secure' : '';
-  res.append('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(signSubscriberId(id))}; Max-Age=${COOKIE_MAX_AGE}; Path=/; HttpOnly; SameSite=Lax${secure}`);
+  req.userId = verifySignedUserId(readCookie(req, USER_COOKIE));
+  res.append('Set-Cookie', `${SESSION_COOKIE}=${encodeURIComponent(signSubscriberId(id))}; ${cookieFlags(COOKIE_MAX_AGE)}`);
   next();
 }
 

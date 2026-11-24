@@ -214,6 +214,13 @@ export interface AlertNotification {
 
 export type PlanId = 'free' | 'pro' | 'premium';
 
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  createdAt: number;
+}
+
 export interface Plan {
   id: PlanId;
   name: string;

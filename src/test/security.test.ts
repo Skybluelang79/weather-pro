@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createSubscriberId,
+  createUserId,
   signSubscriberId,
   verifySignedSubscriberId,
+  signUserId,
+  verifySignedUserId,
   activeSubscription,
   hasEntitlement,
   maxFavoritesFor,
@@ -28,6 +31,20 @@ describe('subscriber sessions', () => {
     expect(verifySignedSubscriberId(`${token}x`)).toBeNull();
     expect(verifySignedSubscriberId('sub_123.forged')).toBeNull();
     expect(verifySignedSubscriberId('malformed')).toBeNull();
+  });
+});
+
+describe('user sessions', () => {
+  it('signs and verifies a user id', () => {
+    vi.stubEnv('SESSION_SECRET', 'test-secret');
+    const id = createUserId();
+    expect(verifySignedUserId(signUserId(id))).toBe(id);
+  });
+
+  it('does not accept a subscriber token as a user token', () => {
+    vi.stubEnv('SESSION_SECRET', 'test-secret');
+    expect(verifySignedUserId(signSubscriberId('sub_123'))).toBeNull();
+    expect(verifySignedSubscriberId(signUserId('usr_123'))).toBeNull();
   });
 });
 
