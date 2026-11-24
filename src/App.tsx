@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
 import SearchBar from './components/SearchBar';
 import CurrentWeather from './components/CurrentWeather';
@@ -44,7 +44,7 @@ const TAB_ICONS: Record<string, string> = {
 
 function AppInner() {
   const { addToast } = useToast();
-  const { plan, hasFeature, maxFavorites, maxHistory } = useSubscription();
+  const { plan, hasFeature, maxFavorites, maxHistory, loading: subscriptionLoading } = useSubscription();
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
   const [air, setAir] = useState<AirQualityData | null>(null);
@@ -58,6 +58,7 @@ function AppInner() {
   const [theme, setTheme] = useState<string>(getInitialTheme);
   const [showMap, setShowMap] = useState(false);
   const [compareWeather, setCompareWeather] = useState<WeatherData | null>(null);
+  const requestId = useRef(0);
   const goToPlans = () => setActiveTab('plans');
 
   useEffect(() => {
@@ -106,22 +107,28 @@ function AppInner() {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLElement && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       if (e.key === 'Escape') {
+        if (showMap) {
+          setShowMap(false);
+          return;
+        }
         const input = document.querySelector<HTMLInputElement>('.search-input');
         if (input) { input.value = ''; input.blur(); }
+        return;
       }
 
-      const num = parseInt(e.key);
-      if (num >= 1 && num <= TABS.length) {
-        setActiveTab(TABS[num - 1]);
-      }
+      if (showMap) return;
+      const num = Number(e.key);
+      if (Number.isInteger(num) && num >= 1 && num <= TABS.length) setActiveTab(TABS[num - 1]);
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [showMap]);
 
   const fetchAll = useCallback(async (params: Record<string, string>, recordAs?: string) => {
+    const id = ++requestId.current;
     setLoading(true);
     setError('');
     try {
@@ -129,27 +136,34 @@ function AppInner() {
         api.getCurrent(params),
         api.getForecast(params),
       ]);
+      if (id !== requestId.current) return;
       setWeather(w);
       setForecast(f);
+      setCompareWeather(null);
+      setAir(null);
       if (w.coord) {
-        api.getAirQuality(w.coord.lat, w.coord.lon).then(setAir).catch(() => {});
+        api.getAirQuality(w.coord.lat, w.coord.lon)
+          .then((data) => { if (id === requestId.current) setAir(data); })
+          .catch(() => {});
       }
       if (recordAs) {
-        api.recordHistory({ city: w.name || recordAs, country: w.sys?.country }).catch(() => {});
-        api.getHistory().then(setHistory).catch(() => {});
+        api.recordHistory({ city: w.name || recordAs, country: w.sys?.country })
+          .then((result) => { if (id === requestId.current) setHistory(result.searchHistory); })
+          .catch(() => {});
       }
     } catch (err) {
+      if (id !== requestId.current) return;
       setError((err as Error).message || 'Failed to fetch weather');
       setWeather(null);
       setForecast(null);
       setAir(null);
     } finally {
-      setLoading(false);
+      if (id === requestId.current) setLoading(false);
     }
   }, []);
 
   const handleSearch = (city: string) => {
-    fetchAll({ city, units: unit === 'F' ? 'imperial' : 'metric' }, city);
+    fetchAll({ city }, city);
   };
 
   const handleLocation = () => {
@@ -157,7 +171,7 @@ function AppInner() {
     setError('Getting location...');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        fetchAll({ lat: String(pos.coords.latitude), lon: String(pos.coords.longitude), units: unit === 'F' ? 'imperial' : 'metric' });
+        fetchAll({ lat: String(pos.coords.latitude), lon: String(pos.coords.longitude) });
       },
       () => setError('Location access denied. Please search by city name.')
     );
@@ -165,14 +179,14 @@ function AppInner() {
 
   const handlePickLocation = (coords: { lat: number; lon: number }) => {
     setShowMap(false);
-    fetchAll({ lat: String(coords.lat), lon: String(coords.lon), units: unit === 'F' ? 'imperial' : 'metric' }, '__map__');
+    fetchAll({ lat: String(coords.lat), lon: String(coords.lon) }, '__map__');
     setActiveTab('weather');
   };
 
   const handleCompareCity = async (city: string) => {
     if (!city.trim()) return;
     try {
-      const w = await api.getCurrent({ city: city.trim(), units: unit === 'F' ? 'imperial' : 'metric' });
+      const w = await api.getCurrent({ city: city.trim() });
       setCompareWeather(w);
       addToast(`Added ${w.name} for comparison`, 'success');
     } catch (err) {
@@ -188,7 +202,6 @@ function AppInner() {
       const params: Record<string, string> = weather.coord
         ? { lat: String(weather.coord.lat), lon: String(weather.coord.lon) }
         : { city: weather.name };
-      params.units = next === 'F' ? 'imperial' : 'metric';
       fetchAll(params);
     }
   };
@@ -196,42 +209,62 @@ function AppInner() {
   const handleFavorite = async () => {
     if (!weather) return;
     const existing = favorites.find(f => f.city.toLowerCase() === weather.name.toLowerCase());
-    if (existing) {
-      await api.removeFavorite(existing.id);
-      addToast(`${weather.name} removed from favorites`, 'info');
-    } else {
-      if (favorites.length >= maxFavorites) {
-        addToast(`The Basic plan saves up to ${maxFavorites} locations. Upgrade for unlimited favorites.`, 'error');
-        goToPlans();
-        return;
+    try {
+      if (existing) {
+        await api.removeFavorite(existing.id);
+        addToast(`${weather.name} removed from favorites`, 'info');
+      } else {
+        if (favorites.length >= maxFavorites) {
+          addToast(`The Basic plan saves up to ${maxFavorites} locations. Upgrade for unlimited favorites.`, 'error');
+          goToPlans();
+          return;
+        }
+        await api.addFavorite({
+          city: weather.name,
+          country: weather.sys?.country,
+          lat: weather.coord?.lat,
+          lon: weather.coord?.lon,
+        });
+        addToast(`${weather.name} added to favorites`, 'success');
       }
-      await api.addFavorite({ city: weather.name, country: weather.sys.country, lat: weather.coord.lat, lon: weather.coord.lon });
-      addToast(`${weather.name} added to favorites`, 'success');
+      setFavorites(await api.getFavorites());
+    } catch {
+      addToast('Could not update favorites', 'error');
     }
-    const favs = await api.getFavorites();
-    setFavorites(favs);
   };
 
   const handleFavClick = (fav: Favorite) => {
-    fetchAll({ city: fav.city, units: unit === 'F' ? 'imperial' : 'metric' }, fav.city);
+    fetchAll({ city: fav.city }, fav.city);
     setActiveTab('weather');
   };
 
   const handleRemoveFav = async (id: string) => {
-    await api.removeFavorite(id);
-    setFavorites(await api.getFavorites());
-    addToast('Removed from favorites', 'info');
+    try {
+      await api.removeFavorite(id);
+      setFavorites(await api.getFavorites());
+      addToast('Removed from favorites', 'info');
+    } catch {
+      addToast('Could not remove favorite', 'error');
+    }
   };
 
   const handleRemoveHistory = async (id: string) => {
-    await api.removeHistory(id);
-    setHistory(await api.getHistory());
+    try {
+      await api.removeHistory(id);
+      setHistory(await api.getHistory());
+    } catch {
+      addToast('Could not remove history entry', 'error');
+    }
   };
 
   const handleClearHistory = async () => {
-    await api.clearHistory();
-    setHistory([]);
-    addToast('Search history cleared', 'info');
+    try {
+      await api.clearHistory();
+      setHistory([]);
+      addToast('Search history cleared', 'info');
+    } catch {
+      addToast('Could not clear history', 'error');
+    }
   };
 
   const cycleTheme = () => {
@@ -285,17 +318,24 @@ function AppInner() {
 
         <SearchBar onSearch={handleSearch} loading={loading} />
 
-        <SearchChips history={history} onSelect={handleSearch} />
+        <SearchChips history={history.slice(0, maxHistory)} onSelect={handleSearch} />
 
         {error && (
-          <div className={`error-toast ${error.includes('Getting') ? 'info' : ''}`}>
+          <div className={`error-toast ${error.includes('Getting') ? 'info' : ''}`} role={error.includes('Getting') ? 'status' : 'alert'}>
             {error}
           </div>
         )}
 
-        <div className="tabs">
+        <div className="tabs" role="tablist" aria-label="Weather sections">
           {TABS.map((tab, i) => (
-            <button key={tab} className={`tab ${activeTab === tab ? 'active' : ''}`} onClick={() => setActiveTab(tab)}>
+            <button
+              key={tab}
+              className={`tab ${activeTab === tab ? 'active' : ''}`}
+              role="tab"
+              aria-selected={activeTab === tab}
+              aria-label={tab}
+              onClick={() => setActiveTab(tab)}
+            >
               {TAB_ICONS[tab]}
               <span className="tab-label">{tab === 'ai' ? 'AI' : tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
               <span className="tab-shortcut">{i + 1}</span>
@@ -334,16 +374,27 @@ function AppInner() {
               )}
               {weather.coord && <Alerts lat={weather.coord.lat} lon={weather.coord.lon} />}
               {air && <AirQuality data={air} />}
-              <div className="compare-bar">
-                <span className="compare-bar-label">Compare with:</span>
-                <form className="compare-bar-form" onSubmit={(e) => { e.preventDefault(); const input = (e.target as HTMLFormElement).elements[0] as HTMLInputElement; handleCompareCity(input.value); e.target.reset(); }}>
-                  <input type="text" placeholder="Another city..." className="compare-bar-input" />
-                  <button type="submit" className="compare-bar-btn">+</button>
-                </form>
-              </div>
-              {weather && compareWeather && (
-                <WeatherCompare weatherA={weather} weatherB={compareWeather} unit={unit} />
-              )}
+              {!subscriptionLoading && hasFeature('multiCityCompare') ? (
+                <>
+                  <div className="compare-bar">
+                    <span className="compare-bar-label">Compare with:</span>
+                    <form className="compare-bar-form" onSubmit={(e) => { e.preventDefault(); const input = (e.target as HTMLFormElement).elements[0] as HTMLInputElement; handleCompareCity(input.value); e.target.reset(); }}>
+                      <input type="text" placeholder="Another city..." className="compare-bar-input" />
+                      <button type="submit" className="compare-bar-btn">+</button>
+                    </form>
+                  </div>
+                  {weather && compareWeather && (
+                    <WeatherCompare weatherA={weather} weatherB={compareWeather} unit={unit} />
+                  )}
+                </>
+              ) : !subscriptionLoading ? (
+                <UpgradeCard
+                  title="Compare Multiple Cities"
+                  description="Compare temperatures, rain and wind across cities side by side."
+                  requiredPlan="pro"
+                  onUpgrade={goToPlans}
+                />
+              ) : null}
             </>
           )}
 
@@ -354,7 +405,7 @@ function AppInner() {
             </>
           )}
 
-          {!loading && activeTab === 'forecast' && weather?.coord && (
+          {!loading && !subscriptionLoading && activeTab === 'forecast' && weather?.coord && (
             hasFeature('extendedForecast') ? (
               <PremiumForecast
                 lat={weather.coord.lat}
@@ -372,7 +423,7 @@ function AppInner() {
             )
           )}
 
-          {activeTab === 'maps' && (
+          {activeTab === 'maps' && !subscriptionLoading && (
             <WeatherMap
               lat={weather?.coord?.lat}
               lon={weather?.coord?.lon}
@@ -381,7 +432,7 @@ function AppInner() {
             />
           )}
 
-          {activeTab === 'ai' && (
+          {activeTab === 'ai' && !subscriptionLoading && (
             weather?.coord ? (
               <AIAssistant
                 lat={weather.coord.lat}
@@ -399,7 +450,7 @@ function AppInner() {
             )
           )}
 
-          {activeTab === 'alerts' && (
+          {activeTab === 'alerts' && !subscriptionLoading && (
             <AlertRules
               lat={weather?.coord?.lat}
               lon={weather?.coord?.lon}

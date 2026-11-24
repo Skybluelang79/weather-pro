@@ -32,6 +32,9 @@ Copy `.env.example` to `.env` and fill in only what you need. Never commit `.env
 | --- | --- | --- |
 | `OPENWEATHER_API_KEY` | Yes | Current weather, forecast, geocoding, air quality and map tiles |
 | `PORT` | No | Local API port, default `3002` |
+| `SESSION_SECRET` | Production yes | Signs the server-issued subscriber cookie; falling back to `PAYSTACK_SECRET_KEY` or a local dev secret is not suitable for production |
+| `ALLOWED_ORIGIN` | No | Origin allowed to call the credentialed API; defaults to the Netlify URL or `http://localhost:5174` |
+| `ALLOW_DEMO_UPGRADES` | No | Set to `true` to keep free demo upgrades available when Paystack is configured |
 | `CACHE_TTL_MS` | No | Overrides all API cache TTLs in milliseconds |
 | `AI_API_KEY`, `AI_API_BASE`, `AI_MODEL` | No | Optional AI assistant provider; otherwise rule-based answers |
 | `PAYSTACK_SECRET_KEY` | No | Enables real Paystack checkout, verification and webhooks |
@@ -62,7 +65,9 @@ netlify env:set PAYSTACK_SECRET_KEY sk_live_xxxx --site 1c5a07ef-fa98-4e7d-9bc9-
 4. Set `PAYSTACK_CALLBACK_URL` to your deployed site with `?billing=verify`.
 5. Add `https://your-site.netlify.app/api/billing/webhook` as a Paystack webhook URL.
 
-Without `PAYSTACK_SECRET_KEY`, `/api/plans` reports `paymentsConfigured: false` and checkout falls back to local demo upgrades.
+Without `PAYSTACK_SECRET_KEY`, `/api/plans` reports `paymentsConfigured: false` and checkout falls back to local demo upgrades. When a Paystack key is present, `/api/subscription/demo` is disabled unless `ALLOW_DEMO_UPGRADES=true`.
+
+Subscriber identity is an HTTP-only signed cookie issued by the API; client-supplied subscriber IDs are ignored. PRO endpoints are also enforced server-side: extended forecast (14 days), maps, AI assistant, custom alerts, full history, and unlimited favorites return `403 UPGRADE_REQUIRED` for Basic users. Premium raises the extended forecast cap to 30 days and adds climate analytics.
 
 ## Scripts
 
@@ -102,7 +107,7 @@ Alert rules are evaluated against live forecast data whenever the Alerts tab loa
 - **SMS** — enabled with the Twilio variables
 - **Push** — enabled with VAPID keys and browser permission; stale subscriptions are removed automatically
 
-The service worker caches most API responses with stale-while-revalidate, but alert, subscription and billing endpoints always use the network.
+The service worker caches most API responses with stale-while-revalidate, but alert, subscription, billing, favorites and history endpoints always use the network so mutations are not masked by cached data.
 
 ## Deployment
 

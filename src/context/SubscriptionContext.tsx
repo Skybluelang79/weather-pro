@@ -32,15 +32,23 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   }, []);
 
   useEffect(() => {
-    refresh();
+    let active = true;
     const params = new URLSearchParams(window.location.search);
     const reference = params.get('reference') || (params.get('billing') === 'verify' ? sessionStorage.getItem('weatherpro-payment-ref') : null);
-    if (reference) {
-      api.verifyBilling(reference)
-        .then(result => { if (result.success) setSubscription(result.subscription); })
-        .catch(() => {})
-        .finally(() => sessionStorage.removeItem('weatherpro-payment-ref'));
-    }
+
+    (async () => {
+      await refresh();
+      if (!reference) return;
+      try {
+        const result = await api.verifyBilling(reference);
+        if (active && result.success) setSubscription(result.subscription);
+      } catch {
+      } finally {
+        sessionStorage.removeItem('weatherpro-payment-ref');
+      }
+    })();
+
+    return () => { active = false; };
   }, [refresh]);
 
   const selectDemoPlan = useCallback(async (nextPlan: Subscription['plan']) => {

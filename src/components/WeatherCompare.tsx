@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import type { WeatherData } from '../types';
+import { formatTemp } from '../services/helpers';
 
 interface MetricsEntry {
   name: string | undefined;
@@ -12,7 +13,13 @@ interface MetricsEntry {
   visibility: string | null;
 }
 
-const metrics = [
+interface MetricDef {
+  key: keyof MetricsEntry;
+  label: string;
+  unit: (unit: string) => string;
+}
+
+const metrics: MetricDef[] = [
   { key: 'temp' as const, label: 'Temperature', unit: (u: string) => u === 'F' ? '°F' : '°C' },
   { key: 'feels_like' as const, label: 'Feels Like', unit: (u: string) => u === 'F' ? '°F' : '°C' },
   { key: 'humidity' as const, label: 'Humidity', unit: () => '%' },
@@ -81,12 +88,16 @@ export default function WeatherCompare({ weatherA, weatherB, unit }: WeatherComp
                 lClass = lNum > rNum ? 'higher' : 'lower';
                 rClass = rNum > lNum ? 'higher' : 'lower';
               }
-              const suffix = m.unit(unit);
+              const renderValue = (value: string | number | null | undefined) => {
+                if (value == null) return '—';
+                if (m.key === 'temp' || m.key === 'feels_like') return formatTemp(Number(value), unit);
+                return `${value}${m.unit(unit)}`;
+              };
               return (
                 <tr key={m.key}>
                   <td className="compare-label">{m.label}</td>
-                  <td className={`compare-value ${lClass}`}>{lv != null ? `${lv}${suffix}` : '—'}</td>
-                  <td className={`compare-value ${rClass}`}>{rv != null ? `${rv}${suffix}` : '—'}</td>
+                  <td className={`compare-value ${lClass}`}>{renderValue(lv)}</td>
+                  <td className={`compare-value ${rClass}`}>{renderValue(rv)}</td>
                 </tr>
               );
             })}

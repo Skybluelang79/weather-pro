@@ -5,23 +5,13 @@ import type {
 } from '../types';
 
 const BASE = '/api';
-const SUBSCRIBER_KEY = 'weatherpro-subscriber-id';
-
-export function getSubscriberId(): string {
-  let id = localStorage.getItem(SUBSCRIBER_KEY);
-  if (!id) {
-    id = `sub_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-    localStorage.setItem(SUBSCRIBER_KEY, id);
-  }
-  return id;
-}
 
 async function request(path: string, options?: RequestInit): Promise<any> {
   const r = await fetch(`${BASE}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      'x-subscriber-id': getSubscriberId(),
       ...options?.headers,
     },
   });
@@ -75,11 +65,11 @@ export const api = {
 
   getPlans: (): Promise<{ plans: Plan[]; currency: string; paymentsConfigured: boolean }> => get('/plans'),
   getSubscription: (): Promise<Subscription> => get('/subscription'),
-  setDemoPlan: (plan: PlanId): Promise<Subscription> => post('/subscription/demo', { plan, subscriberId: getSubscriberId() }),
+  setDemoPlan: (plan: PlanId): Promise<Subscription> => post('/subscription/demo', { plan }),
   startCheckout: (plan: PlanId, email: string): Promise<{ authorizationUrl: string; reference: string }> =>
-    post('/billing/checkout', { plan, email, subscriberId: getSubscriberId() }),
+    post('/billing/checkout', { plan, email }),
   verifyBilling: (reference: string): Promise<{ success: boolean; subscription: Subscription }> =>
-    get(`/billing/verify?reference=${encodeURIComponent(reference)}&subscriberId=${encodeURIComponent(getSubscriberId())}`),
+    get(`/billing/verify?reference=${encodeURIComponent(reference)}`),
 
   getAlertRules: (evaluate = false): Promise<AlertRule[]> => get(`/alerts/rules${evaluate ? '?evaluate=true' : ''}`),
   createAlertRule: (rule: Omit<AlertRule, 'id' | 'createdAt' | 'enabled'>): Promise<AlertRule> => post('/alerts/rules', rule),

@@ -2,13 +2,28 @@ import express from 'express';
 import cors from 'cors';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
-import { createHmac } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 import { sendNotification, setVapidDetails } from 'web-push';
 import { loadData, saveData } from './storage.js';
 import { generateAIAnswer, evaluateRule, weatherCodeInfo, DISCLAIMER } from './intelligence.js';
 import { PLANS, PLAN_IDS, getPlan } from './plans.js';
+import {
+  sessionMiddleware,
+  activeSubscription,
+  hasEntitlement,
+  maxFavoritesFor,
+  maxForecastDaysFor,
+  maxHistoryFor,
+} from './security.js';
 
 config();
+
+const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN
+  || (process.env.NETLIFY === 'true' ? 'https://myweatherreportapp.netlify.app' : 'http://localhost:5174');
+const DEMO_UPGRADES_ENABLED = process.env.ALLOW_DEMO_UPGRADES === 'true' || !process.env.PAYSTACK_SECRET_KEY;
+const DEMO_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ALERT_CHANNELS = ['in-app', 'email', 'sms', 'webhook', 'push'];
+const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.apple.com'];
 
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS) || 0;
 const API_KEY = process.env.OPENWEATHER_API_KEY;
@@ -82,7 +97,7 @@ async function fetchJson(url, { ttl, headers } = {}) {
 }
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: ALLOWED_ORIGIN, credentials: true }));
 app.use(express.json({ verify: (req, _res, buf) => { req.rawBody = buf.toString(); } }));
 
 app.use((req, res, next) => {
@@ -91,6 +106,7 @@ app.use((req, res, next) => {
   }
   next();
 });
+app.use(sessionMiddleware);
 
 const buckets = new Map();
 const RATE_LIMIT = 60;
@@ -99,11 +115,12 @@ const RATE_WINDOW_MS = 60 * 1000;
 function rateLimiter(req, res, next) {
   if (!req.path.startsWith('/api')) return next();
   const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+  const key = `${req.subscriberId || 'anonymous'}:${ip}`;
   const now = Date.now();
-  let bucket = buckets.get(ip);
+  let bucket = buckets.get(key);
   if (!bucket || now - bucket.windowStart >= RATE_WINDOW_MS) {
     bucket = { windowStart: now, tokens: RATE_LIMIT - 1 };
-    buckets.set(ip, bucket);
+    buckets.set(key, bucket);
     return next();
   }
   if (bucket.tokens <= 0) {
@@ -121,17 +138,19 @@ const alertRules = [];
 const notifications = [];
 const subscriptions = {};
 const pushSubscriptions = [];
+const processedEvents = new Set();
 let initPromise = null;
 
 function ensureInitialized() {
   if (!initPromise) {
     initPromise = loadData().then((data) => {
-      favorites.push(...(data.favorites || []));
-      searchHistory.push(...(data.searchHistory || []));
-      alertRules.push(...(data.alertRules || []));
-      notifications.push(...(data.notifications || []));
+      favorites.push(...(data.favorites || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
+      searchHistory.push(...(data.searchHistory || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
+      alertRules.push(...(data.alertRules || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
+      notifications.push(...(data.notifications || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
+      pushSubscriptions.push(...(data.pushSubscriptions || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
       Object.assign(subscriptions, data.subscriptions || {});
-      pushSubscriptions.push(...(data.pushSubscriptions || []));
+      for (const id of data.processedEvents || []) processedEvents.add(String(id));
     }).catch((e) => console.error('Failed to load persisted state:', e.message));
   }
   return initPromise;
@@ -142,11 +161,48 @@ function genId() {
 }
 
 async function persist() {
-  await saveData({ favorites, searchHistory, alertRules, notifications, subscriptions, pushSubscriptions });
+  await saveData({
+    favorites,
+    searchHistory,
+    alertRules,
+    notifications,
+    subscriptions,
+    pushSubscriptions,
+    processedEvents: [...processedEvents],
+  });
 }
 
 function subscriberFrom(req) {
-  return String(req.query?.subscriberId || req.get?.('x-subscriber-id') || req.body?.subscriberId || 'anonymous');
+  return req.subscriberId || 'anonymous';
+}
+
+function owned(collection, owner) {
+  return collection.filter(record => record.owner === owner);
+}
+
+function findOwned(collection, id, owner) {
+  return collection.find(record => record.id === id && record.owner === owner);
+}
+
+function currentSubscription(owner) {
+  return activeSubscription(subscriptions[owner]);
+}
+
+function requireFeature(feature) {
+  return async (req, res, next) => {
+    try {
+      await ensureInitialized();
+      if (!hasEntitlement(currentSubscription(req.subscriberId), feature)) {
+        return res.status(403).json({
+          error: 'This feature requires a Pro plan.',
+          code: 'UPGRADE_REQUIRED',
+        });
+      }
+      next();
+    } catch {
+      return res.status(500).json({ error: 'Could not verify subscription' });
+    }
+  };
 }
 
 function normalizeUnits(units) {
@@ -157,6 +213,18 @@ function validCoord(lat, lon) {
   const a = Number(lat);
   const b = Number(lon);
   return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180;
+}
+
+function coordsFromQuery(query) {
+  const lat = Number(query.lat);
+  const lon = Number(query.lon);
+  return validCoord(lat, lon) ? { lat, lon } : null;
+}
+
+function clampLimit(value, fallback, max = 50) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(max, Math.floor(parsed)));
 }
 
 async function resolveLocation({ city, lat, lon }) {
@@ -326,134 +394,125 @@ async function getPremiumForecastData({ lat, lon, days = 7, units = 'metric' }) 
 app.get('/api/weather/current', async (req, res) => {
   try {
     await ensureInitialized();
-    const { city, lat, lon, units = 'metric' } = req.query;
+    const { city, units = 'metric' } = req.query;
+    const coords = coordsFromQuery(req.query);
     let url;
-    if (lat && lon) {
-      url = `${BASE}/weather?lat=${lat}&lon=${lon}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
+    if (coords) {
+      url = `${BASE}/weather?lat=${coords.lat}&lon=${coords.lon}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
     } else if (city) {
-      url = `${BASE}/weather?q=${encodeURIComponent(city)}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
+      url = `${BASE}/weather?q=${encodeURIComponent(String(city))}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
     } else {
-      return res.status(400).json({ error: 'Provide city or lat/lon' });
+      return res.status(400).json({ error: 'Provide city or valid lat/lon' });
     }
     const data = await fetchJson(url, { ttl: DEFAULT_TTL.weather });
-    if (data.cod && data.cod !== 200) {
-      return res.status(data.cod).json({ error: data.message });
+    const code = Number(data.cod);
+    if (code && code !== 200) {
+      return res.status(code >= 400 && code < 600 ? code : 502).json({ error: 'Weather data unavailable' });
     }
     res.json(data);
-  } catch (err) {
-    console.error(err);
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to fetch weather' });
+  } catch {
+    res.status(502).json({ error: 'Failed to fetch weather' });
   }
 });
 
 app.get('/api/weather/forecast', async (req, res) => {
   try {
-    const { city, lat, lon, units = 'metric' } = req.query;
+    const { city, units = 'metric' } = req.query;
+    const coords = coordsFromQuery(req.query);
     let url;
-    if (lat && lon) {
-      url = `${BASE}/forecast?lat=${lat}&lon=${lon}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
+    if (coords) {
+      url = `${BASE}/forecast?lat=${coords.lat}&lon=${coords.lon}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
     } else if (city) {
-      url = `${BASE}/forecast?q=${encodeURIComponent(city)}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
+      url = `${BASE}/forecast?q=${encodeURIComponent(String(city))}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
     } else {
-      return res.status(400).json({ error: 'Provide city or lat/lon' });
+      return res.status(400).json({ error: 'Provide city or valid lat/lon' });
     }
     const data = await fetchJson(url, { ttl: DEFAULT_TTL.forecast });
-    if (data.cod && data.cod !== '200') {
-      return res.status(400).json({ error: data.message });
-    }
+    if (String(data.cod) !== '200') return res.status(502).json({ error: 'Forecast unavailable' });
     res.json(data);
-  } catch (err) {
-    console.error(err);
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to fetch forecast' });
+  } catch {
+    res.status(502).json({ error: 'Failed to fetch forecast' });
   }
 });
 
 app.get('/api/weather/air', async (req, res) => {
   try {
-    const { lat, lon } = req.query;
-    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
-    const url = `https://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${API_KEY}`;
-    const data = await fetchJson(url, { ttl: DEFAULT_TTL.air });
-    res.json(data);
-  } catch (err) {
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to fetch air quality' });
+    const coords = coordsFromQuery(req.query);
+    if (!coords) return res.status(400).json({ error: 'valid lat and lon required' });
+    const url = `${BASE}/air_pollution?lat=${coords.lat}&lon=${coords.lon}&appid=${API_KEY}`;
+    res.json(await fetchJson(url, { ttl: DEFAULT_TTL.air }));
+  } catch {
+    res.status(502).json({ error: 'Failed to fetch air quality' });
   }
 });
 
 app.get('/api/weather/alerts', async (req, res) => {
   try {
-    const { lat, lon } = req.query;
-    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
-    try {
-      const pointUrl = `https://api.weather.gov/points/${lat},${lon}`;
-      const pointR = await fetch(pointUrl, {
-        headers: { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' },
-      });
-      if (pointR.ok) {
-        const alertsUrl = `https://api.weather.gov/alerts/point?lat=${lat}&lon=${lon}`;
-        const r = await fetch(alertsUrl, {
-          headers: { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' },
-        });
-        if (!r.ok) return res.json({ alerts: [] });
-        const data = await r.json();
-        const alerts = (data.features || []).slice(0, 5).map(f => ({
-          id: f.properties.id,
-          event: f.properties.event,
-          headline: f.properties.headline,
-          severity: f.properties.severity,
-          urgency: f.properties.urgency,
-          description: f.properties.description,
-          instruction: f.properties.instruction || '',
-        }));
-        return res.json({ alerts });
-      }
-    } catch {
-      res.json({ alerts: [] });
-      return;
-    }
-    res.json({ alerts: [] });
+    const coords = coordsFromQuery(req.query);
+    if (!coords) return res.status(400).json({ error: 'valid lat and lon required' });
+    const headers = { 'User-Agent': 'WeatherPro/1.0', 'Accept': 'application/json' };
+    const pointR = await fetch(`https://api.weather.gov/points/${coords.lat},${coords.lon}`, { headers });
+    if (!pointR.ok) return res.status(502).json({ error: 'Weather alerts unavailable' });
+    const r = await fetch(`https://api.weather.gov/alerts/point?lat=${coords.lat}&lon=${coords.lon}`, { headers });
+    if (!r.ok) return res.status(502).json({ error: 'Weather alerts unavailable' });
+    const data = await r.json();
+    const alerts = (data.features || []).slice(0, 5).map(f => ({
+      id: f.properties.id,
+      event: f.properties.event,
+      headline: f.properties.headline,
+      severity: f.properties.severity,
+      urgency: f.properties.urgency,
+      description: f.properties.description,
+      instruction: f.properties.instruction || '',
+    }));
+    return res.json({ alerts });
   } catch {
-    res.json({ alerts: [] });
+    return res.status(502).json({ error: 'Weather alerts unavailable' });
   }
 });
 
 app.get('/api/geocode', async (req, res) => {
   try {
-    const { q, limit = 5 } = req.query;
+    const { q } = req.query;
     if (!q) return res.status(400).json({ error: 'q required' });
-    const url = `${GEO_BASE}/direct?q=${encodeURIComponent(q)}&limit=${limit}&appid=${API_KEY}`;
-    const data = await fetchJson(url, { ttl: DEFAULT_TTL.geocode });
-    res.json(data);
-  } catch (err) {
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to geocode' });
+    const limit = clampLimit(req.query.limit, 5);
+    const url = `${GEO_BASE}/direct?q=${encodeURIComponent(String(q))}&limit=${limit}&appid=${API_KEY}`;
+    res.json(await fetchJson(url, { ttl: DEFAULT_TTL.geocode }));
+  } catch {
+    res.status(502).json({ error: 'Failed to geocode' });
   }
 });
 
 app.get('/api/reverse-geocode', async (req, res) => {
   try {
-    const { lat, lon, limit = 1 } = req.query;
-    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
-    const url = `${GEO_BASE}/reverse?lat=${lat}&lon=${lon}&limit=${limit}&appid=${API_KEY}`;
-    const data = await fetchJson(url, { ttl: DEFAULT_TTL.geocode });
-    res.json(data);
-  } catch (err) {
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to reverse geocode' });
+    const coords = coordsFromQuery(req.query);
+    if (!coords) return res.status(400).json({ error: 'valid lat and lon required' });
+    const limit = clampLimit(req.query.limit, 1);
+    const url = `${GEO_BASE}/reverse?lat=${coords.lat}&lon=${coords.lon}&limit=${limit}&appid=${API_KEY}`;
+    res.json(await fetchJson(url, { ttl: DEFAULT_TTL.geocode }));
+  } catch {
+    res.status(502).json({ error: 'Failed to reverse geocode' });
   }
 });
 
 app.get('/api/favorites', async (req, res) => {
   await ensureInitialized();
-  res.json(favorites);
+  res.json(owned(favorites, req.subscriberId));
 });
 
 app.post('/api/favorites', async (req, res) => {
   await ensureInitialized();
-  const { city, country, lat, lon } = req.body;
-  if (!city) return res.status(400).json({ error: 'city required' });
-  if (favorites.find(f => f.city.toLowerCase() === city.toLowerCase())) {
+  const { city, country, lat, lon } = req.body || {};
+  if (typeof city !== 'string' || !city.trim()) return res.status(400).json({ error: 'city required' });
+  const owner = req.subscriberId;
+  const userFavorites = owned(favorites, owner);
+  if (userFavorites.length >= maxFavoritesFor(currentSubscription(owner))) {
+    return res.status(403).json({ error: 'Favorite limit reached for your plan.', code: 'UPGRADE_REQUIRED' });
+  }
+  if (userFavorites.some(f => f.city.toLowerCase() === city.toLowerCase())) {
     return res.status(409).json({ error: 'Already in favorites' });
   }
-  const fav = { id: genId(), city, country, lat, lon, addedAt: Date.now() };
+  const fav = { id: genId(), owner, city, country, lat, lon, addedAt: Date.now() };
   favorites.unshift(fav);
   await persist();
   res.json(fav);
@@ -461,7 +520,7 @@ app.post('/api/favorites', async (req, res) => {
 
 app.delete('/api/favorites/:id', async (req, res) => {
   await ensureInitialized();
-  const idx = favorites.findIndex(f => f.id === req.params.id);
+  const idx = favorites.findIndex(f => f.id === req.params.id && f.owner === req.subscriberId);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   favorites.splice(idx, 1);
   await persist();
@@ -470,34 +529,38 @@ app.delete('/api/favorites/:id', async (req, res) => {
 
 app.get('/api/history', async (req, res) => {
   await ensureInitialized();
-  res.json(searchHistory);
+  res.json(owned(searchHistory, req.subscriberId).slice(0, maxHistoryFor(currentSubscription(req.subscriberId))));
 });
 
 app.post('/api/history/record', async (req, res) => {
   try {
     await ensureInitialized();
-    const { city, country } = req.body;
-    if (!city) return res.status(400).json({ error: 'city required' });
-    const existing = searchHistory.find(h => h.city.toLowerCase() === city.toLowerCase());
+    const { city, country } = req.body || {};
+    if (typeof city !== 'string' || !city.trim()) return res.status(400).json({ error: 'city required' });
+    const owner = req.subscriberId;
+    const userHistory = owned(searchHistory, owner);
+    const existing = userHistory.find(h => h.city.toLowerCase() === city.toLowerCase());
     if (existing) {
       existing.timestamp = Date.now();
       searchHistory.splice(searchHistory.indexOf(existing), 1);
       searchHistory.unshift(existing);
     } else {
-      searchHistory.unshift({ id: genId(), city, country, timestamp: Date.now() });
-      if (searchHistory.length > 20) searchHistory.pop();
+      searchHistory.unshift({ id: genId(), owner, city, country, timestamp: Date.now() });
+    }
+    const limit = maxHistoryFor(currentSubscription(owner));
+    for (const entry of owned(searchHistory, owner).slice(limit)) {
+      searchHistory.splice(searchHistory.indexOf(entry), 1);
     }
     await persist();
-    res.json({ success: true, searchHistory });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message || 'Failed to record history' });
+    res.json({ success: true, searchHistory: owned(searchHistory, owner) });
+  } catch {
+    res.status(500).json({ error: 'Failed to record history' });
   }
 });
 
 app.delete('/api/history/:id', async (req, res) => {
   await ensureInitialized();
-  const idx = searchHistory.findIndex(h => h.id === req.params.id);
+  const idx = searchHistory.findIndex(h => h.id === req.params.id && h.owner === req.subscriberId);
   if (idx === -1) return res.status(404).json({ error: 'Not found' });
   searchHistory.splice(idx, 1);
   await persist();
@@ -506,17 +569,21 @@ app.delete('/api/history/:id', async (req, res) => {
 
 app.delete('/api/history', async (req, res) => {
   await ensureInitialized();
-  searchHistory.length = 0;
+  for (const entry of owned(searchHistory, req.subscriberId)) {
+    searchHistory.splice(searchHistory.indexOf(entry), 1);
+  }
   await persist();
   res.json({ success: true });
 });
 
-app.get('/api/premium/forecast', async (req, res) => {
+app.get('/api/premium/forecast', requireFeature('extendedForecast'), async (req, res) => {
   try {
     const { city, lat, lon, days = 7, units = 'metric' } = req.query;
+    const allowedDays = maxForecastDaysFor(currentSubscription(req.subscriberId));
+    const requestedDays = Math.max(1, Math.min(allowedDays, Number(days) || 7));
     const location = await resolveLocation({ city, lat, lon });
     if (city) location.name = String(city);
-    const forecast = await getPremiumForecastData({ lat: location.lat, lon: location.lon, days, units });
+    const forecast = await getPremiumForecastData({ lat: location.lat, lon: location.lon, days: requestedDays, units });
     res.json({
       location: {
         name: location.name,
@@ -529,7 +596,7 @@ app.get('/api/premium/forecast', async (req, res) => {
       disclaimer: DISCLAIMER,
     });
   } catch (err) {
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Failed to load extended forecast' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: 'Failed to load extended forecast' });
   }
 });
 
@@ -553,13 +620,16 @@ function aiLimiter(req, res, next) {
   next();
 }
 
-app.post('/api/ai/weather', aiLimiter, async (req, res) => {
+app.post('/api/ai/weather', requireFeature('aiAssistant'), aiLimiter, async (req, res) => {
   try {
     const { question = '', city, lat, lon, units = 'metric', days = 7 } = req.body || {};
+    if (typeof question !== 'string') return res.status(400).json({ error: 'Question must be a string' });
     if (question.length > 600) return res.status(400).json({ error: 'Question is too long' });
+    const allowedDays = maxForecastDaysFor(currentSubscription(req.subscriberId));
+    const requestedDays = Math.max(1, Math.min(allowedDays, Number(days) || 7));
     const location = await resolveLocation({ city, lat, lon });
     if (city) location.name = String(city);
-    const forecast = await getPremiumForecastData({ lat: location.lat, lon: location.lon, days, units });
+    const forecast = await getPremiumForecastData({ lat: location.lat, lon: location.lon, days: requestedDays, units });
     const result = await generateAIAnswer({
       question,
       location,
@@ -570,16 +640,22 @@ app.post('/api/ai/weather', aiLimiter, async (req, res) => {
     });
     res.json({ ...result, location: { name: location.name, country: location.country } });
   } catch (err) {
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'AI assistant unavailable' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: 'AI assistant unavailable' });
   }
 });
 
 function getSubscription(subscriberId) {
-  return subscriptions[subscriberId] || { plan: 'free', status: 'active', source: 'free', since: null };
+  return activeSubscription(subscriptions[subscriberId]);
 }
 
-function setSubscription(subscriberId, plan, source) {
-  subscriptions[subscriberId] = { plan, status: 'active', source, since: Date.now() };
+function setSubscription(subscriberId, plan, source, ttlMs) {
+  subscriptions[subscriberId] = {
+    plan,
+    status: 'active',
+    source,
+    since: Date.now(),
+    expiresAt: ttlMs ? Date.now() + ttlMs : null,
+  };
 }
 
 app.get('/api/plans', (_req, res) => {
@@ -593,12 +669,15 @@ app.get('/api/subscription', async (req, res) => {
 
 app.post('/api/subscription/demo', async (req, res) => {
   await ensureInitialized();
+  if (!DEMO_UPGRADES_ENABLED) {
+    return res.status(403).json({ error: 'Demo upgrades are disabled in production.' });
+  }
   const plan = String(req.body?.plan || '');
   if (!PLAN_IDS.includes(plan)) return res.status(400).json({ error: 'Unknown plan' });
-  const subscription = { ...getSubscription(subscriberFrom(req)), plan, source: 'demo', since: Date.now() };
-  subscriptions[subscriberFrom(req)] = subscription;
+  const id = subscriberFrom(req);
+  setSubscription(id, plan, 'demo', DEMO_TTL_MS);
   await persist();
-  res.json(subscription);
+  res.json(getSubscription(id));
 });
 
 app.post('/api/billing/checkout', async (req, res) => {
@@ -629,8 +708,8 @@ app.post('/api/billing/checkout', async (req, res) => {
       return res.status(502).json({ error: data.message || 'Could not start checkout' });
     }
     res.json({ authorizationUrl: data.data.authorization_url, reference });
-  } catch (err) {
-    res.status(500).json({ error: err.message || 'Could not start checkout' });
+  } catch {
+    res.status(500).json({ error: 'Could not start checkout' });
   }
 });
 
@@ -644,17 +723,29 @@ app.get('/api/billing/verify', async (req, res) => {
       headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
     });
     const data = await response.json();
-    if (!response.ok || !data.status) return res.status(502).json({ error: data.message || 'Verification failed' });
+    if (!response.ok || !data.status) return res.status(502).json({ error: 'Verification failed' });
     const transaction = data.data || {};
-    const id = subscriberFrom(req);
     if (transaction.status === 'success') {
-      const plan = PLAN_IDS.includes(transaction.metadata?.plan) ? transaction.metadata.plan : 'pro';
-      setSubscription(id, plan, 'paystack');
+      const id = String(transaction.metadata?.subscriberId || '');
+      const plan = transaction.metadata?.plan;
+      if (!id || id !== req.subscriberId) {
+        return res.status(403).json({ error: 'Payment does not belong to this session.' });
+      }
+      if (!PLAN_IDS.includes(plan) || plan === 'free') {
+        return res.status(400).json({ error: 'Invalid plan in payment metadata.' });
+      }
+      const expected = getPlan(plan);
+      const amount = Number(transaction.amount);
+      const currency = String(transaction.currency || '').toUpperCase();
+      if (amount !== expected.price * 100 || currency !== expected.currency) {
+        return res.status(409).json({ error: 'Payment amount or currency does not match the plan.' });
+      }
+      setSubscription(id, plan, 'paystack', 365 * 24 * 60 * 60 * 1000);
       await persist();
     }
-    res.json({ success: transaction.status === 'success', subscription: getSubscription(id) });
-  } catch (err) {
-    res.status(500).json({ error: err.message || 'Verification failed' });
+    res.json({ success: transaction.status === 'success', subscription: getSubscription(req.subscriberId) });
+  } catch {
+    res.status(500).json({ error: 'Verification failed' });
   }
 });
 
@@ -662,25 +753,37 @@ app.post('/api/billing/webhook', async (req, res) => {
   if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Payments are not configured' });
   const signature = req.get('x-paystack-signature') || '';
   const expected = createHmac('sha512', PAYSTACK_SECRET_KEY).update(req.rawBody || '').digest('hex');
-  if (signature !== expected) return res.status(401).json({ error: 'Invalid signature' });
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (actualBuffer.length !== expectedBuffer.length || !timingSafeEqual(actualBuffer, expectedBuffer)) {
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
   try {
     await ensureInitialized();
     const event = req.body || {};
+    const eventId = String(event.id || signature);
+    if (processedEvents.has(eventId)) return res.json({ received: true });
+    processedEvents.add(eventId);
     if (event.event === 'charge.success') {
-      const id = event.data?.metadata?.subscriberId;
+      const id = String(event.data?.metadata?.subscriberId || '');
       const plan = event.data?.metadata?.plan;
-      if (id && PLAN_IDS.includes(plan)) {
-        setSubscription(String(id), plan, 'paystack');
-        await persist();
+      if (id && PLAN_IDS.includes(plan) && plan !== 'free') {
+        const expectedPlan = getPlan(plan);
+        const amount = Number(event.data?.amount);
+        const currency = String(event.data?.currency || '').toUpperCase();
+        if (amount === expectedPlan.price * 100 && currency === expectedPlan.currency) {
+          setSubscription(id, plan, 'paystack', 365 * 24 * 60 * 60 * 1000);
+        }
       }
     }
+    await persist();
     res.json({ received: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message || 'Webhook failed' });
+  } catch {
+    res.status(500).json({ error: 'Webhook failed' });
   }
 });
 
-app.get('/api/maps', async (_req, res) => {
+app.get('/api/maps', requireFeature('weatherMaps'), async (_req, res) => {
   try {
     const data = await fetchJson(RAINVIEWER_MAPS, { ttl: 10 * 60 * 1000 });
     res.json({
@@ -689,8 +792,8 @@ app.get('/api/maps', async (_req, res) => {
       radar: { past: data.radar?.past || [], nowcast: data.radar?.nowcast || [] },
       satellite: { infrared: data.satellite?.infrared || [] },
     });
-  } catch (err) {
-    res.status(502).json({ error: err.message || 'Could not load map metadata' });
+  } catch {
+    res.status(502).json({ error: 'Could not load map metadata' });
   }
 });
 
@@ -702,7 +805,7 @@ const TILE_LAYERS = {
   air: 'pollution_new',
 };
 
-app.get('/api/tiles/:layer/:z/:x/:y', async (req, res) => {
+app.get('/api/tiles/:layer/:z/:x/:y', requireFeature('weatherMaps'), async (req, res) => {
   const layer = TILE_LAYERS[req.params.layer];
   const z = Number(req.params.z);
   const x = Number(req.params.x);
@@ -727,8 +830,8 @@ app.get('/api/tiles/:layer/:z/:x/:y', async (req, res) => {
     tileCache.set(key, { buffer, expires: Date.now() + 10 * 60 * 1000 });
     if (tileCache.size > 500) tileCache.delete(tileCache.keys().next().value);
     return res.set('Content-Type', 'image/png').set('Cache-Control', 'public, max-age=600').send(buffer);
-  } catch (err) {
-    return res.status(502).json({ error: err.message || 'Map tile unavailable' });
+  } catch {
+    return res.status(502).json({ error: 'Map tile unavailable' });
   }
 });
 
@@ -790,22 +893,23 @@ async function deliverNotification(notification, rule) {
     }
   }
 
-  if (channels.includes('push') && configured.push && pushSubscriptions.length) {
+  const ownerSubscriptions = pushSubscriptions.filter(subscription => subscription.owner === rule.owner);
+  if (channels.includes('push') && configured.push && ownerSubscriptions.length) {
     setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
     const payload = JSON.stringify({
       title: `WeatherPro alert · ${notification.city}`,
       body: notification.message,
       url: '/',
     });
-    const outcomes = await Promise.allSettled(pushSubscriptions.map(subscription => sendNotification(subscription, payload)));
+    const outcomes = await Promise.allSettled(ownerSubscriptions.map(subscription => sendNotification(subscription, payload)));
     const sent = outcomes.filter(outcome => outcome.status === 'fulfilled').length;
     results.push = `${sent}/${outcomes.length} sent`;
     const stale = outcomes
-      .map((outcome, index) => (outcome.status === 'rejected' && [404, 410].includes(outcome.reason?.statusCode) ? pushSubscriptions[index].endpoint : null))
+      .map((outcome, index) => (outcome.status === 'rejected' && [404, 410].includes(outcome.reason?.statusCode) ? ownerSubscriptions[index].endpoint : null))
       .filter(Boolean);
     if (stale.length) {
       for (const endpoint of stale) {
-        const index = pushSubscriptions.findIndex(subscription => subscription.endpoint === endpoint);
+        const index = pushSubscriptions.findIndex(subscription => subscription.endpoint === endpoint && subscription.owner === rule.owner);
         if (index >= 0) pushSubscriptions.splice(index, 1);
       }
       persist().catch(() => {});
@@ -834,6 +938,7 @@ async function recordNotification(rule, evaluation) {
   if (notifications.some(n => n.key === key)) return;
   const notification = {
     id: genId(),
+    owner: rule.owner,
     key,
     ruleId: rule.id,
     city: rule.city || 'Selected location',
@@ -849,9 +954,10 @@ async function recordNotification(rule, evaluation) {
   persist().catch(e => console.error('Failed to persist notification:', e.message));
 }
 
-async function evaluatedRules() {
+async function evaluatedRules(owner) {
+  const userRules = owned(alertRules, owner);
   const groups = new Map();
-  for (const rule of alertRules) {
+  for (const rule of userRules) {
     if (!rule.enabled) continue;
     const key = `${rule.lat},${rule.lon}`;
     if (!groups.has(key)) groups.set(key, []);
@@ -881,29 +987,37 @@ async function evaluatedRules() {
       if (evaluation.triggered) await recordNotification(rule, evaluation);
     }
   }
-  return alertRules.map(rule => results.get(rule.id) || { ...rule, triggered: false, value: null, reason: 'Rule is paused' });
+  return userRules.map(rule => results.get(rule.id) || { ...rule, triggered: false, value: null, reason: 'Rule is paused' });
 }
 
-app.get('/api/alerts/rules', async (req, res) => {
+app.get('/api/alerts/rules', requireFeature('customAlerts'), async (req, res) => {
   await ensureInitialized();
   if (req.query.evaluate === 'true') {
-    res.json(await evaluatedRules());
+    res.json(await evaluatedRules(req.subscriberId));
     return;
   }
-  res.json(alertRules);
+  res.json(owned(alertRules, req.subscriberId));
 });
 
-app.post('/api/alerts/rules', async (req, res) => {
+app.post('/api/alerts/rules', requireFeature('customAlerts'), async (req, res) => {
   try {
     await ensureInitialized();
     const { city, lat, lon, metric, operator = 'above', threshold, leadMinutes = 0, channels = ['in-app'], units = 'metric' } = req.body || {};
     if (!ALERT_METRICS.includes(metric)) return res.status(400).json({ error: 'Invalid metric' });
     if (!['above', 'below'].includes(operator)) return res.status(400).json({ error: 'Invalid operator' });
     if (!Number.isFinite(Number(threshold))) return res.status(400).json({ error: 'A numeric threshold is required' });
+    if (owned(alertRules, req.subscriberId).length >= 20) {
+      return res.status(403).json({ error: 'Alert rule limit reached.', code: 'RULE_LIMIT_REACHED' });
+    }
+    const configured = alertChannels();
+    const allowedChannels = Array.isArray(channels)
+      ? channels.filter(channel => ALERT_CHANNELS.includes(channel) && (channel === 'in-app' || configured[channel]))
+      : ['in-app'];
     const location = await resolveLocation({ city, lat, lon });
     if (city) location.name = String(city);
     const rule = {
       id: genId(),
+      owner: req.subscriberId,
       city: location.name,
       lat: location.lat,
       lon: location.lon,
@@ -911,7 +1025,7 @@ app.post('/api/alerts/rules', async (req, res) => {
       operator,
       threshold: Number(threshold),
       leadMinutes: Math.max(0, Math.min(180, Number(leadMinutes) || 0)),
-      channels: Array.isArray(channels) ? channels : ['in-app'],
+      channels: allowedChannels.length ? allowedChannels : ['in-app'],
       units: normalizeUnits(units),
       enabled: true,
       createdAt: Date.now(),
@@ -920,58 +1034,74 @@ app.post('/api/alerts/rules', async (req, res) => {
     await persist();
     res.json(rule);
   } catch (err) {
-    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: err.message || 'Could not create alert rule' });
+    res.status(err.status && err.status < 600 ? err.status : 500).json({ error: 'Could not create alert rule' });
   }
 });
 
-app.put('/api/alerts/rules/:id', async (req, res) => {
+app.put('/api/alerts/rules/:id', requireFeature('customAlerts'), async (req, res) => {
   await ensureInitialized();
-  const rule = alertRules.find(r => r.id === req.params.id);
+  const rule = findOwned(alertRules, req.params.id, req.subscriberId);
   if (!rule) return res.status(404).json({ error: 'Not found' });
   if (typeof req.body?.enabled === 'boolean') rule.enabled = req.body.enabled;
   await persist();
   res.json(rule);
 });
 
-app.delete('/api/alerts/rules/:id', async (req, res) => {
+app.delete('/api/alerts/rules/:id', requireFeature('customAlerts'), async (req, res) => {
   await ensureInitialized();
-  const idx = alertRules.findIndex(r => r.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  alertRules.splice(idx, 1);
+  const rule = findOwned(alertRules, req.params.id, req.subscriberId);
+  if (!rule) return res.status(404).json({ error: 'Not found' });
+  alertRules.splice(alertRules.indexOf(rule), 1);
   await persist();
   res.json({ success: true });
 });
 
-app.get('/api/alerts/notifications', async (_req, res) => {
+app.get('/api/alerts/notifications', requireFeature('customAlerts'), async (req, res) => {
   await ensureInitialized();
-  res.json(notifications.slice(0, 20));
+  res.json(owned(notifications, req.subscriberId).slice(0, 20));
 });
 
 app.get('/api/alerts/channels', async (_req, res) => {
   res.json(alertChannels());
 });
 
-app.post('/api/alerts/push-subscription', async (req, res) => {
+app.post('/api/alerts/push-subscription', requireFeature('customAlerts'), async (req, res) => {
   try {
     await ensureInitialized();
     const subscription = req.body?.subscription;
     if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
       return res.status(400).json({ error: 'Invalid push subscription' });
     }
+    let endpoint;
+    try {
+      endpoint = new URL(String(subscription.endpoint));
+    } catch {
+      return res.status(400).json({ error: 'Invalid push endpoint' });
+    }
+    const hostAllowed = PUSH_HOSTS.some(host => endpoint.hostname === host || endpoint.hostname.endsWith(`.${host}`));
+    if (endpoint.protocol !== 'https:' || !hostAllowed) {
+      return res.status(400).json({ error: 'Unsupported push endpoint' });
+    }
     if (!alertChannels().push) return res.status(503).json({ error: 'Push notifications are not configured' });
     const record = {
-      endpoint: String(subscription.endpoint),
+      endpoint: endpoint.toString(),
+      owner: req.subscriberId,
       keys: { p256dh: String(subscription.keys.p256dh), auth: String(subscription.keys.auth) },
       expirationTime: subscription.expirationTime || null,
     };
-    const index = pushSubscriptions.findIndex(item => item.endpoint === record.endpoint);
+    const userSubscriptions = owned(pushSubscriptions, req.subscriberId);
+    const index = pushSubscriptions.findIndex(item => item.endpoint === record.endpoint && item.owner === req.subscriberId);
     if (index >= 0) pushSubscriptions[index] = record;
-    else pushSubscriptions.push(record);
-    if (pushSubscriptions.length > 500) pushSubscriptions.shift();
+    else {
+      if (userSubscriptions.length >= 10) {
+        pushSubscriptions.splice(pushSubscriptions.indexOf(userSubscriptions[0]), 1);
+      }
+      pushSubscriptions.push(record);
+    }
     await persist();
     return res.json({ success: true });
-  } catch (err) {
-    return res.status(500).json({ error: err.message || 'Could not save push subscription' });
+  } catch {
+    return res.status(500).json({ error: 'Could not save push subscription' });
   }
 });
 

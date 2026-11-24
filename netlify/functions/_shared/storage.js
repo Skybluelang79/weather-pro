@@ -4,7 +4,7 @@ import path from 'path';
 const DATA_FILE = path.join(process.cwd(), 'server', 'data.json');
 
 function emptyState() {
-  return { favorites: [], searchHistory: [], alertRules: [], subscriptions: {}, notifications: [], pushSubscriptions: [] };
+  return { favorites: [], searchHistory: [], alertRules: [], subscriptions: {}, notifications: [], pushSubscriptions: [], processedEvents: [] };
 }
 
 let blobStorePromise = null;

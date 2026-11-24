@@ -12,11 +12,16 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
-      .then(() => self.clients.matchAll({ type: 'window' }))
-      .then((clients) => {
-        clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED' }));
+      .then((keys) => {
+        const hadOldCache = keys.some((key) => key.startsWith('weatherpro-') && key !== CACHE_NAME);
+        return Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))).then(() => hadOldCache);
+      })
+      .then((hadOldCache) => self.clients.claim().then(() => hadOldCache))
+      .then((hadOldCache) => {
+        if (!hadOldCache) return undefined;
+        return self.clients.matchAll({ type: 'window' }).then((clients) => {
+          clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED' }));
+        });
       })
   );
 });
@@ -29,7 +34,7 @@ self.addEventListener('fetch', (e) => {
   const request = e.request;
 
   // API: stale-while-revalidate
-  const liveApi = ['/api/alerts', '/api/subscription', '/api/billing'];
+  const liveApi = ['/api/alerts', '/api/subscription', '/api/billing', '/api/favorites', '/api/history'];
   if (url.pathname.startsWith('/api/') && !liveApi.some(prefix => url.pathname.startsWith(prefix))) {
     e.respondWith(swr(request));
     return;
@@ -92,15 +97,20 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = e.notification.data?.url || '/';
+  const target = new URL(e.notification.data?.url || '/', self.location.origin);
+  if (target.origin !== self.location.origin) {
+    target.pathname = '/';
+    target.search = '';
+    target.hash = '';
+  }
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
-        if (new URL(client.url).pathname === new URL(url, self.location.origin).pathname && 'focus' in client) {
+        if (new URL(client.url).pathname === target.pathname && 'focus' in client) {
           return client.focus();
         }
       }
-      if (self.clients.openWindow) return self.clients.openWindow(url);
+      if (self.clients.openWindow) return self.clients.openWindow(target.href);
       return undefined;
     })
   );

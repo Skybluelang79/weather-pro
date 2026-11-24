@@ -229,6 +229,7 @@ export interface Subscription {
   status: string;
   source: 'free' | 'demo' | 'paystack';
   since: number | null;
+  expiresAt?: number | null;
 }
 
 export interface RadarFrame {
