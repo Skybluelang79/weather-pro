@@ -5,6 +5,7 @@ import {
   maxFavorites as favoritesLimit,
   maxForecastDays as forecastLimit,
   maxHistory as historyLimit,
+  mergePlanCatalog,
 } from '../services/plans';
 import { SubscriptionContext } from './subscription';
 import type { SubscriptionContextValue } from './subscription';
@@ -22,7 +23,7 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     try {
       const [sub, catalog] = await Promise.all([api.getSubscription(), api.getPlans()]);
       setSubscription(sub);
-      setPlans(catalog.plans);
+      setPlans(mergePlanCatalog(catalog.plans));
       setPaymentsConfigured(catalog.paymentsConfigured);
     } catch {
       setSubscription(FREE_SUBSCRIPTION);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { hasFeature, maxFavorites, maxForecastDays, maxHistory, formatNaira } from '../services/plans';
+import { hasFeature, maxFavorites, maxForecastDays, maxHistory, formatNaira, mergePlanCatalog } from '../services/plans';
+import type { Plan } from '../types';
 
 describe('subscription entitlements', () => {
   it('keeps the free plan on basic features', () => {
@@ -28,5 +29,14 @@ describe('subscription entitlements', () => {
   it('formats naira prices', () => {
     expect(formatNaira(2500)).toBe('₦2,500');
     expect(formatNaira(0)).toBe('₦0');
+  });
+
+  it('fills missing catalog details from local defaults', () => {
+    const merged = mergePlanCatalog([
+      { id: 'pro', name: 'Weather Pro', price: 2500, currency: 'NGN' } as Plan,
+    ]);
+    expect(merged[0].tagline).toBe('Serious planning, finer detail');
+    expect(merged[0].featured).toBe(true);
+    expect(merged[0].features).toContain('AI weather assistant');
   });
 });

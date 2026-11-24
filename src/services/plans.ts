@@ -115,3 +115,15 @@ export function maxHistory(plan: PlanId): number {
 export function formatNaira(amount: number): string {
   return `₦${amount.toLocaleString('en-NG')}`;
 }
+
+export function mergePlanCatalog(serverPlans: Plan[]): Plan[] {
+  return serverPlans.map(plan => {
+    const defaults = PLANS.find(item => item.id === plan.id);
+    return {
+      ...plan,
+      tagline: plan.tagline || defaults?.tagline || '',
+      featured: plan.featured ?? defaults?.featured,
+      features: plan.features?.length ? plan.features : defaults?.features || [],
+    };
+  });
+}
