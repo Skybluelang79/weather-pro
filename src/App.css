@@ -2533,8 +2533,10 @@ button.notification-item {
   cursor: pointer;
 }
 .auth-switch button.active { background: rgba(124, 58, 237, 0.22); border-color: rgba(124, 58, 237, 0.55); }
+.auth-switch button:disabled { opacity: 0.5; cursor: not-allowed; }
 .auth-form { display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 4px; }
 .auth-form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; }
+.auth-form label > span:first-child { color: var(--text-secondary); }
 .auth-form input {
   width: 100%;
   padding: 10px 12px;
@@ -2544,8 +2546,38 @@ button.notification-item {
   color: var(--text-primary);
   font-size: 14px;
   outline: none;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
-.auth-form input:focus { border-color: #7c3aed; box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18); }
+.auth-form input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow); }
+.auth-form input:disabled { opacity: 0.6; cursor: not-allowed; }
+.auth-form input[aria-invalid='true'] { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.14); }
+.password-field { position: relative; display: block; }
+.password-field input { padding-right: 68px; }
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+.password-toggle:hover:not(:disabled) { color: var(--text-primary); background: var(--glass-hover); }
+.password-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.field-error, .auth-hint { font-size: 11px; font-weight: 500; line-height: 1.4; }
+.field-error { color: var(--danger); }
+.auth-hint { color: var(--text-muted); }
+.password-strength { display: flex; flex-direction: column; gap: 4px; margin-top: -4px; }
+.password-strength small { font-size: 10px; color: var(--text-muted); }
+.password-strength-track { height: 4px; border-radius: 4px; background: rgba(255,255,255,0.14); overflow: hidden; }
+.password-strength-track span { display: block; height: 100%; border-radius: 4px; transition: width var(--transition), background var(--transition); }
+.password-strength[data-strength='weak'] .password-strength-track span { background: #f87171; }
+.password-strength[data-strength='fair'] .password-strength-track span { background: #fbbf24; }
+.password-strength[data-strength='strong'] .password-strength-track span { background: #4ade80; }
 .auth-error {
   padding: 9px 12px;
   border-radius: 10px;

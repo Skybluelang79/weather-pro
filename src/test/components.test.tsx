@@ -6,6 +6,9 @@ import History from '../components/History'
 import SearchChips from '../components/SearchChips'
 import Footer from '../components/Footer'
 import SunArc from '../components/SunArc'
+import AuthModal from '../components/AuthModal'
+import { AuthContext } from '../context/auth'
+import type { AuthContextValue } from '../context/auth'
 import { generateFaviconSVG } from '../services/helpers'
 import type { Favorite, HistoryEntry } from '../types'
 
@@ -153,5 +156,57 @@ describe('Dynamic Favicon', () => {
   it('generateFaviconSVG handles unknown icons', () => {
     const svg = generateFaviconSVG('99d')
     expect(svg).toContain('🌤️')
+  })
+})
+
+describe('AuthModal', () => {
+  function renderAuth(overrides: Partial<AuthContextValue> = {}) {
+    const value: AuthContextValue = {
+      user: null,
+      loading: false,
+      signup: vi.fn(async () => {}),
+      login: vi.fn(async () => {}),
+      logout: vi.fn(async () => {}),
+      refresh: vi.fn(async () => {}),
+      ...overrides,
+    }
+    const onClose = vi.fn()
+    render(
+      <ToastProvider>
+        <AuthContext.Provider value={value}>
+          <AuthModal open onClose={onClose} />
+        </AuthContext.Provider>
+      </ToastProvider>,
+    )
+    return { value, onClose }
+  }
+
+  it('submits normalized login credentials', async () => {
+    const { value, onClose } = renderAuth()
+    fireEvent.change(screen.getByPlaceholderText('you@example.com'), { target: { value: ' User@Example.COM ' } })
+    fireEvent.change(screen.getByPlaceholderText('Your password'), { target: { value: 'secret123' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await Promise.resolve()
+    expect(value.login).toHaveBeenCalledWith({ email: 'user@example.com', password: 'secret123' })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  it('shows signup-only fields and password toggle', () => {
+    renderAuth()
+    fireEvent.click(screen.getByRole('tab', { name: 'Sign up' }))
+    expect(screen.getByPlaceholderText('Repeat your password')).toBeDefined()
+    const passwordInput = screen.getByPlaceholderText('At least 8 characters')
+    fireEvent.click(screen.getByRole('button', { name: 'Show password' }))
+    expect(passwordInput.getAttribute('type')).toBe('text')
+  })
+
+  it('blocks invalid signup submissions', async () => {
+    const { value } = renderAuth()
+    fireEvent.click(screen.getByRole('tab', { name: 'Sign up' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create account' }))
+    await Promise.resolve()
+    expect(value.signup).not.toHaveBeenCalled()
+    expect(screen.getByText('Enter your name.')).toBeDefined()
+    expect(screen.getByText('Confirm your password.')).toBeDefined()
   })
 })

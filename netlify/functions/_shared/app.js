@@ -763,7 +763,7 @@ app.post('/api/auth/register', async (req, res) => {
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '');
     const name = String(req.body?.name || '').trim().slice(0, 80);
-    if (!EMAIL_PATTERN.test(email)) return res.status(400).json({ error: 'Enter a valid email address.' });
+    if (!EMAIL_PATTERN.test(email) || email.length > 254) return res.status(400).json({ error: 'Enter a valid email address.' });
     if (password.length < 8 || password.length > 128) return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
     if (users.some(user => user.email === email)) return res.status(409).json({ error: 'An account with that email already exists.' });
 
@@ -793,6 +793,9 @@ app.post('/api/auth/login', async (req, res) => {
     await ensureInitialized();
     const email = normalizeEmail(req.body?.email);
     const password = String(req.body?.password || '');
+    if (!EMAIL_PATTERN.test(email) || email.length > 254 || !password || password.length > 128) {
+      return res.status(401).json({ error: 'Invalid email or password.' });
+    }
     const user = users.find(record => record.email === email);
     if (!user || !passwordMatches(password, user)) {
       return res.status(401).json({ error: 'Invalid email or password.' });

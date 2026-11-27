@@ -12,7 +12,8 @@ export function useModalFocus(open: boolean, onClose: () => void, ref: RefObject
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusableSelector = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     const focusables = modal ? Array.from(modal.querySelectorAll<HTMLElement>(focusableSelector)) : [];
-    const first = focusables[0] || modal;
+    const preferred = modal?.querySelector<HTMLElement>('[autofocus]') || null;
+    const first = preferred && focusables.includes(preferred) ? preferred : focusables[0] || modal;
     first?.focus();
 
     const previousOverflow = document.body.style.overflow;
