@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import type { CSSProperties } from 'react';
 import ErrorBoundary from './components/ErrorBoundary';
 import SearchBar from './components/SearchBar';
 import CurrentWeather from './components/CurrentWeather';
@@ -51,6 +52,8 @@ function AppInner() {
   const { user, logout } = useAuth();
   const { plan, hasFeature, maxFavorites, maxHistory, loading: subscriptionLoading } = useSubscription();
   const alertsEnabled = hasFeature('customAlerts');
+  const planTheme = plan === 'premium' ? 'plan-intelligence' : plan === 'pro' ? 'plan-pro' : 'plan-free';
+  const planLabel = plan === 'premium' ? 'Intelligence' : plan === 'pro' ? 'Pro' : 'Free';
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
   const [air, setAir] = useState<AirQualityData | null>(null);
@@ -323,7 +326,10 @@ function AppInner() {
   const gradient = getWeatherGradient(weatherType, isDay);
 
   return (
-    <div className={`app ${loaded ? 'loaded' : ''}`} style={{ backgroundImage: gradient }}>
+    <div
+      className={`app ${planTheme} ${loaded ? 'loaded' : ''}`}
+      style={{ '--weather-gradient': gradient } as CSSProperties}
+    >
       {weather && <WeatherEffects iconCode={weather.weather[0].icon} />}
 
       <div className="app-content">
@@ -345,7 +351,7 @@ function AppInner() {
             )}
             <button className="plan-badge-btn" onClick={goToPlans} title="Subscription plans" aria-label="Subscription plans">
               <span>👑</span>
-              <span>{plan === 'premium' ? 'Premium' : plan === 'pro' ? 'Pro' : 'Free'}</span>
+              <span>{planLabel}</span>
             </button>
             {user ? (
               <div className="auth-user">

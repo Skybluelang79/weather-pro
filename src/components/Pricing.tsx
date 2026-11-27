@@ -125,7 +125,7 @@ export default function Pricing() {
         {catalog.map(item => {
           const current = item.id === plan;
           return (
-            <div key={item.id} className={`plan-card glass-panel ${item.featured ? 'featured' : ''} ${current ? 'current' : ''}`}>
+            <div key={item.id} className={`plan-card plan-card-${item.id} glass-panel ${item.featured ? 'featured' : ''} ${current ? 'current' : ''}`}>
               {item.featured && <div className="plan-popular">POPULAR</div>}
               {current && <div className="plan-current">CURRENT PLAN</div>}
               <h3>{item.name}</h3>
