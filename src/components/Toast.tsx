@@ -36,11 +36,13 @@ export function ToastProvider({ children }: ToastProviderProps) {
   return (
     <ToastContext.Provider value={{ addToast }}>
       {children}
-      <div className="toast-container">
+      <div className="toast-container" role="status" aria-live="polite" aria-atomic="false">
         {toasts.map(toast => (
-          <div
+          <button
+            type="button"
             key={toast.id}
             className={`toast toast-${toast.type}`}
+            aria-label={`Dismiss notification: ${toast.message}`}
             onClick={() => removeToast(toast.id)}
           >
             <span className="toast-icon">
@@ -49,7 +51,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
               {toast.type === 'info' && 'i'}
             </span>
             <span className="toast-message">{toast.message}</span>
-          </div>
+          </button>
         ))}
       </div>
     </ToastContext.Provider>

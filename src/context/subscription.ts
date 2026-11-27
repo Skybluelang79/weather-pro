@@ -7,12 +7,15 @@ export interface SubscriptionContextValue {
   plan: PlanId;
   plans: Plan[];
   paymentsConfigured: boolean;
+  demoUpgradesEnabled: boolean;
+  subscriptionError: string;
   loading: boolean;
   hasFeature: (feature: PremiumFeature) => boolean;
   maxForecastDays: number;
   maxFavorites: number;
   maxHistory: number;
   selectDemoPlan: (plan: PlanId) => Promise<void>;
+  manageSubscription: (action: 'cancel' | 'downgrade') => Promise<void>;
   checkout: (plan: PlanId, email: string) => Promise<void>;
   refresh: () => Promise<void>;
 }

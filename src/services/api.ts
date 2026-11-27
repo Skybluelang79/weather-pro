@@ -70,19 +70,31 @@ export const api = {
   askAI: (data: { question: string; city?: string; lat?: number; lon?: number; units: string }): Promise<AIAnswer> =>
     post('/ai/weather', data),
 
-  getPlans: (): Promise<{ plans: Plan[]; currency: string; paymentsConfigured: boolean }> => get('/plans'),
+  getPlans: (): Promise<{
+    plans: Plan[];
+    currency: string;
+    paymentsConfigured: boolean;
+    demoUpgradesEnabled: boolean;
+    billingDays: number;
+  }> => get('/plans'),
   getSubscription: (): Promise<Subscription> => get('/subscription'),
   setDemoPlan: (plan: PlanId): Promise<Subscription> => post('/subscription/demo', { plan }),
+  manageSubscription: (action: 'cancel' | 'downgrade'): Promise<Subscription> => post('/subscription/manage', { action }),
   startCheckout: (plan: PlanId, email: string): Promise<{ authorizationUrl: string; reference: string }> =>
     post('/billing/checkout', { plan, email }),
   verifyBilling: (reference: string): Promise<{ success: boolean; subscription: Subscription }> =>
     get(`/billing/verify?reference=${encodeURIComponent(reference)}`),
 
+  getCompareWeather: (city: string): Promise<WeatherData> => get(`/weather/compare?city=${encodeURIComponent(city)}`),
   getAlertRules: (evaluate = false): Promise<AlertRule[]> => get(`/alerts/rules${evaluate ? '?evaluate=true' : ''}`),
+  evaluateAlerts: (): Promise<AlertRule[]> => post('/alerts/evaluate', {}),
   createAlertRule: (rule: Omit<AlertRule, 'id' | 'createdAt' | 'enabled'>): Promise<AlertRule> => post('/alerts/rules', rule),
   updateAlertRule: (id: string, enabled: boolean): Promise<AlertRule> => put(`/alerts/rules/${id}`, { enabled }),
   removeAlertRule: (id: string): Promise<{ success: boolean }> => del(`/alerts/rules/${id}`),
   getNotifications: (): Promise<AlertNotification[]> => get('/alerts/notifications'),
+  getNotificationSummary: (): Promise<{ total: number; unread: number }> => get('/alerts/notifications/summary'),
+  markNotificationRead: (id: string): Promise<AlertNotification> => post(`/alerts/notifications/${id}/read`, {}),
+  markAllNotificationsRead: (): Promise<{ success: boolean; unread: number }> => post('/alerts/notifications/read-all', {}),
   getAlertChannels: (): Promise<AlertChannels> => get('/alerts/channels'),
   savePushSubscription: (subscription: PushSubscriptionJSON): Promise<{ success: boolean }> =>
     post('/alerts/push-subscription', { subscription }),

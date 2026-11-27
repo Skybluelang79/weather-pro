@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAuth } from '../context/auth';
+import { useModalFocus } from '../hooks/useModalFocus';
 import { useToast } from './Toast';
 
 interface AuthModalProps {
@@ -18,15 +19,9 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const modalRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const handler = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  useModalFocus(open, onClose, modalRef);
 
   if (!open) return null;
 
@@ -58,7 +53,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
 
   return (
     <div className="auth-overlay" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-      <div className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <div ref={modalRef} className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-title" tabIndex={-1}>
         <div className="auth-header">
           <h3 id="auth-title">{mode === 'login' ? 'Welcome back' : 'Create your account'}</h3>
           <button className="map-close" onClick={onClose} aria-label="Close sign in">✕</button>

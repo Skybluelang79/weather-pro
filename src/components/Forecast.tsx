@@ -75,10 +75,13 @@ export default function Forecast({ data, unit }: ForecastProps) {
           const time = new Date(item.dt * 1000).toLocaleTimeString('en-US', { hour: 'numeric', hour12: true });
           const isExpanded = expandedHour === i;
           return (
-            <div
+            <button
+              type="button"
               key={i}
               className={`hourly-card ${isExpanded ? 'expanded' : ''}`}
               style={{ animationDelay: `${i * 0.05}s` }}
+              aria-expanded={isExpanded}
+              aria-label={`${time} details`}
               onClick={() => setExpandedHour(isExpanded ? null : i)}
             >
               <div className="hourly-time">{time}</div>
@@ -105,7 +108,7 @@ export default function Forecast({ data, unit }: ForecastProps) {
                   </div>
                 </div>
               )}
-            </div>
+            </button>
           );
         })}
       </div>

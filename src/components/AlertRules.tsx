@@ -35,6 +35,7 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
   const [channel, setChannel] = useState('in-app');
   const [channels, setChannels] = useState<AlertChannels | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
+  const [evaluating, setEvaluating] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -86,6 +87,20 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
       addToast((err as Error).message || 'Could not enable push alerts', 'error');
     } finally {
       setPushBusy(false);
+    }
+  };
+
+  const evaluateNow = async () => {
+    setEvaluating(true);
+    try {
+      const results = await api.evaluateAlerts();
+      setRules(results);
+      setNotifications(await api.getNotifications());
+      addToast('Alert rules checked', 'info');
+    } catch (err) {
+      addToast((err as Error).message || 'Could not check alert rules', 'error');
+    } finally {
+      setEvaluating(false);
     }
   };
 
@@ -181,18 +196,24 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
               <option value="email" disabled={!channels?.email}>Email{channels && !channels.email ? ' (not configured)' : ''}</option>
               <option value="push" disabled={!channels?.push}>Push{channels && !channels.push ? ' (not configured)' : ''}</option>
               <option value="sms" disabled={!channels?.sms}>SMS{channels && !channels.sms ? ' (not configured)' : ''}</option>
+              <option value="webhook" disabled={!channels?.webhook}>Webhook{channels && !channels.webhook ? ' (not configured)' : ''}</option>
             </select>
           </label>
           <button className="alert-create" type="submit">Create alert</button>
         </form>
         <div className="alert-delivery">
-          {channels?.push && (
-            <button className="push-enable" onClick={enablePush} disabled={pushBusy}>
-              {pushBusy ? 'Enabling…' : 'Enable browser notifications'}
+          <div className="alert-delivery-actions">
+            <button className="plan-manage-btn" onClick={() => void evaluateNow()} disabled={evaluating}>
+              {evaluating ? 'Checking…' : 'Run check now'}
             </button>
-          )}
+            {channels?.push && (
+              <button className="push-enable" onClick={enablePush} disabled={pushBusy}>
+                {pushBusy ? 'Enabling…' : 'Enable browser notifications'}
+              </button>
+            )}
+          </div>
           <p className="premium-disclaimer">
-            In-app alerts are always on. Email, SMS and push require the matching provider keys; webhook forwarding works independently.
+            In-app alerts are always on. Email, SMS, webhook and push require the matching provider keys. Scheduled checks run in the background for subscribers.
           </p>
         </div>
       </div>
@@ -206,7 +227,16 @@ export default function AlertRules({ lat, lon, city, unit, onUpgrade }: AlertRul
           {rules.map(rule => (
             <div key={rule.id} className={`rule-card ${rule.triggered ? 'triggered' : ''}`}>
               <div className="rule-main">
-                <span className="rule-title">{metricLabel(rule.metric)} {rule.operator} {rule.threshold}{rule.metric === 'rain_probability' ? '%' : ''}</span>
+                <span className="rule-title">
+                  {metricLabel(rule.metric)} {rule.operator} {rule.threshold}
+                  {rule.metric === 'rain_probability'
+                    ? '%'
+                    : rule.metric === 'temperature'
+                      ? (rule.units === 'imperial' ? '°F' : '°C')
+                      : rule.metric === 'wind_speed'
+                        ? (rule.units === 'imperial' ? ' mph' : ' km/h')
+                        : ''}
+                </span>
                 <span className="rule-location">{rule.city}{rule.leadMinutes ? ` · ${rule.leadMinutes} min lead` : ''}</span>
                 <span className="rule-status">
                   {rule.triggered ? '● Triggered' : rule.enabled ? '○ Watching' : '○ Paused'}

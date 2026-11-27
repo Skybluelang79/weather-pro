@@ -107,7 +107,7 @@ export default function WeatherMap({ lat, lon, city, onUpgrade }: WeatherMapProp
         tileLayerRef.current = null;
       }
     };
-  }, [tileUrl, layer]);
+  }, [tileUrl, layer, lat, lon]);
 
   useEffect(() => {
     const map = mapRef.current;

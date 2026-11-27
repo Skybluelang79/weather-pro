@@ -9,7 +9,7 @@ export type PremiumFeature =
   | 'unlimitedLocations'
   | 'weatherHistory'
   | 'climateAnalytics'
-  | 'adFree'
+  | 'priorityAlerts'
   | 'multiCityCompare'
   | 'weatherMaps';
 
@@ -43,9 +43,9 @@ export const PLANS: Plan[] = [
       'Advanced radar & map layers',
       'AI weather assistant',
       'Unlimited saved locations',
-      'Personalized custom alerts',
-      'Full weather history',
-      'No advertisements',
+      'Custom alerts with scheduled delivery',
+      'Extended search history',
+      'Multi-city comparison',
     ],
   },
   {
@@ -58,9 +58,8 @@ export const PLANS: Plan[] = [
       'Everything in Pro',
       '30-day climate outlook',
       'Extended climate analytics',
-      'Lower-confidence long-range trends',
-      'Priority alert delivery',
-      'Advanced weather intelligence',
+      'Hourly background alert checks',
+      'Long-range confidence indicators',
     ],
   },
 ];
@@ -76,7 +75,6 @@ const FEATURE_MATRIX: Record<PlanId, PremiumFeature[]> = {
     'customAlerts',
     'unlimitedLocations',
     'weatherHistory',
-    'adFree',
     'multiCityCompare',
   ],
   premium: [
@@ -89,7 +87,7 @@ const FEATURE_MATRIX: Record<PlanId, PremiumFeature[]> = {
     'unlimitedLocations',
     'weatherHistory',
     'climateAnalytics',
-    'adFree',
+    'priorityAlerts',
     'multiCityCompare',
   ],
 };

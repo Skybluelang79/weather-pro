@@ -18,6 +18,8 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
   const [subscription, setSubscription] = useState<Subscription>(FREE_SUBSCRIPTION);
   const [plans, setPlans] = useState<SubscriptionContextValue['plans']>([]);
   const [paymentsConfigured, setPaymentsConfigured] = useState(false);
+  const [demoUpgradesEnabled, setDemoUpgradesEnabled] = useState(false);
+  const [subscriptionError, setSubscriptionError] = useState('');
   const [loading, setLoading] = useState(true);
   const { user, loading: authLoading } = useAuth();
 
@@ -27,8 +29,10 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       setSubscription(sub);
       setPlans(mergePlanCatalog(catalog.plans));
       setPaymentsConfigured(catalog.paymentsConfigured);
-    } catch {
-      setSubscription(FREE_SUBSCRIPTION);
+      setDemoUpgradesEnabled(catalog.demoUpgradesEnabled);
+      setSubscriptionError('');
+    } catch (err) {
+      setSubscriptionError((err as Error).message || 'Could not refresh subscription status');
     } finally {
       setLoading(false);
     }
@@ -45,10 +49,13 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
       if (!reference) return;
       try {
         const result = await api.verifyBilling(reference);
-        if (active && result.success) setSubscription(result.subscription);
-      } catch {
+        if (!active || !result.success) return;
+        await refresh();
+      } catch (err) {
+        if (active) setSubscriptionError((err as Error).message || 'Payment verification failed');
       } finally {
         sessionStorage.removeItem('weatherpro-payment-ref');
+        window.history.replaceState({}, document.title, window.location.pathname);
       }
     })();
 
@@ -57,6 +64,12 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
 
   const selectDemoPlan = useCallback(async (nextPlan: Subscription['plan']) => {
     const updated = await api.setDemoPlan(nextPlan);
+    setSubscription(updated);
+    setSubscriptionError('');
+  }, []);
+
+  const manageSubscription = useCallback(async (action: 'cancel' | 'downgrade') => {
+    const updated = await api.manageSubscription(action);
     setSubscription(updated);
   }, []);
 
@@ -71,15 +84,18 @@ export function SubscriptionProvider({ children }: { children: React.ReactNode }
     plan: subscription.plan || 'free',
     plans,
     paymentsConfigured,
+    demoUpgradesEnabled,
+    subscriptionError,
     loading,
     hasFeature: feature => checkFeature(subscription.plan || 'free', feature),
     maxForecastDays: forecastLimit(subscription.plan || 'free'),
     maxFavorites: favoritesLimit(subscription.plan || 'free'),
     maxHistory: historyLimit(subscription.plan || 'free'),
     selectDemoPlan,
+    manageSubscription,
     checkout,
     refresh,
-  }), [subscription, plans, paymentsConfigured, loading, selectDemoPlan, checkout, refresh]);
+  }), [subscription, plans, paymentsConfigured, demoUpgradesEnabled, subscriptionError, loading, selectDemoPlan, manageSubscription, checkout, refresh]);
 
   return <SubscriptionContext.Provider value={value}>{children}</SubscriptionContext.Provider>;
 }

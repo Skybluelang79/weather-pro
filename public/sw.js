@@ -1,4 +1,4 @@
-const CACHE_NAME = 'weatherpro-v3';
+const CACHE_NAME = 'weatherpro-v4';
 const PRECACHE = ['/', '/index.html'];
 
 self.addEventListener('install', (e) => {
@@ -34,7 +34,10 @@ self.addEventListener('fetch', (e) => {
   const request = e.request;
 
   // API: stale-while-revalidate
-  const liveApi = ['/api/alerts', '/api/subscription', '/api/billing', '/api/favorites', '/api/history'];
+  const liveApi = [
+    '/api/alerts', '/api/subscription', '/api/billing', '/api/favorites', '/api/history',
+    '/api/auth', '/api/plans',
+  ];
   if (url.pathname.startsWith('/api/') && !liveApi.some(prefix => url.pathname.startsWith(prefix))) {
     e.respondWith(swr(request));
     return;
@@ -58,7 +61,10 @@ function swr(request) {
           if (res.ok) cache.put(request, res.clone());
           return res;
         })
-        .catch(() => cached);
+        .catch(() => cached || new Response(JSON.stringify({ error: 'Offline' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        }));
       return cached || fetchPromise;
     })
   );
@@ -97,12 +103,13 @@ self.addEventListener('push', (e) => {
 
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const target = new URL(e.notification.data?.url || '/', self.location.origin);
-  if (target.origin !== self.location.origin) {
-    target.pathname = '/';
-    target.search = '';
-    target.hash = '';
+  let target;
+  try {
+    target = new URL(e.notification.data?.url || '/', self.location.origin);
+  } catch {
+    target = new URL('/', self.location.origin);
   }
+  if (target.origin !== self.location.origin) target = new URL('/', self.location.origin);
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {

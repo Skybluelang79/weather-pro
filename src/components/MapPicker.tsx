@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { api } from '../services/api';
+import { useModalFocus } from '../hooks/useModalFocus';
 
 interface MapPickerProps {
   open: boolean;
@@ -14,9 +15,18 @@ export default function MapPicker({ open, onClose, onPick, loading }: MapPickerP
   const mapRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const markerRef = useRef<any>(null);
+  const modalRef = useRef<HTMLDivElement>(null);
   const [coords, setCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [place, setPlace] = useState('');
   const [resolving, setResolving] = useState(false);
+
+  useModalFocus(open, onClose, modalRef);
+
+  useEffect(() => {
+    if (open) return;
+    setCoords(null);
+    setPlace('');
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -94,9 +104,9 @@ export default function MapPicker({ open, onClose, onPick, loading }: MapPickerP
 
   return (
     <div className="map-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="map-modal">
+      <div ref={modalRef} className="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-picker-title" tabIndex={-1}>
         <div className="map-header">
-          <h3>Pick a location on the map</h3>
+          <h3 id="map-picker-title">Pick a location on the map</h3>
           <button className="map-close" onClick={onClose} aria-label="Close map">✕</button>
         </div>
         <div className="map-canvas" ref={containerRef} />

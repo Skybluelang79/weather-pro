@@ -209,6 +209,7 @@ export interface AlertNotification {
   message: string;
   channels: string[];
   createdAt: number;
+  readAt?: number | null;
   delivery?: AlertDelivery;
 }
 
@@ -229,6 +230,9 @@ export interface Plan {
   tagline: string;
   features: string[];
   featured?: boolean;
+  interval?: string;
+  limits?: { forecastDays: number; favorites: number | null; history: number | null };
+  featureKeys?: string[];
 }
 
 export interface Subscription {
@@ -237,6 +241,7 @@ export interface Subscription {
   source: 'free' | 'demo' | 'paystack';
   since: number | null;
   expiresAt?: number | null;
+  daysRemaining?: number | null;
 }
 
 export interface RadarFrame {

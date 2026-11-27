@@ -38,9 +38,11 @@ export default function Alerts({ lat, lon }: AlertsProps) {
       </div>
       <div className="alerts-list">
         {alerts.map((alert, i) => (
-          <div
+          <button
+            type="button"
             key={alert.id || i}
             className={`alert-card ${alert.severity?.toLowerCase() || 'unknown'} ${expanded === i ? 'expanded' : ''}`}
+            aria-expanded={expanded === i}
             onClick={() => setExpanded(expanded === i ? null : i)}
           >
             <div className="alert-top">
@@ -60,7 +62,7 @@ export default function Alerts({ lat, lon }: AlertsProps) {
                 )}
               </div>
             )}
-          </div>
+          </button>
         ))}
       </div>
     </div>

@@ -6,7 +6,7 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { sendNotification, setVapidDetails } from 'web-push';
 import { loadData, saveData } from './storage.js';
 import { generateAIAnswer, evaluateRule, weatherCodeInfo, DISCLAIMER } from './intelligence.js';
-import { PLANS, PLAN_IDS, getPlan } from './plans.js';
+import { PLANS, PLAN_IDS, FEATURE_PLAN, getPlan, BILLING_DAYS } from './plans.js';
 import {
   sessionMiddleware,
   setAuthCookies,
@@ -25,7 +25,8 @@ config();
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN
   || (process.env.NETLIFY === 'true' ? 'https://myweatherreportapp.netlify.app' : 'http://localhost:5174');
 const DEMO_UPGRADES_ENABLED = process.env.ALLOW_DEMO_UPGRADES === 'true' || !process.env.PAYSTACK_SECRET_KEY;
-const DEMO_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const DEMO_TTL_MS = BILLING_DAYS * 24 * 60 * 60 * 1000;
+const BILLING_PERIOD_MS = DEMO_TTL_MS;
 const ALERT_CHANNELS = ['in-app', 'email', 'sms', 'webhook', 'push'];
 const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.apple.com'];
 
@@ -143,6 +144,7 @@ const notifications = [];
 const subscriptions = {};
 const pushSubscriptions = [];
 const processedEvents = new Set();
+const checkouts = [];
 const users = [];
 let initPromise = null;
 
@@ -155,6 +157,7 @@ function ensureInitialized() {
       notifications.push(...(data.notifications || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
       pushSubscriptions.push(...(data.pushSubscriptions || []).map(record => ({ ...record, owner: record.owner || 'legacy' })));
       Object.assign(subscriptions, data.subscriptions || {});
+      checkouts.push(...(data.checkouts || []));
       users.push(...(data.users || []));
       for (const id of data.processedEvents || []) processedEvents.add(String(id));
     }).catch((e) => console.error('Failed to load persisted state:', e.message));
@@ -175,6 +178,7 @@ async function persist() {
     subscriptions,
     pushSubscriptions,
     processedEvents: [...processedEvents],
+    checkouts,
     users,
   });
 }
@@ -220,8 +224,9 @@ function requireFeature(feature) {
     try {
       await ensureInitialized();
       if (!hasEntitlement(currentSubscription(req.subscriberId), feature)) {
+        const requiredPlan = getPlan(FEATURE_PLAN[feature] || 'pro').name;
         return res.status(403).json({
-          error: 'This feature requires a Pro plan.',
+          error: `This feature requires ${requiredPlan}.`,
           code: 'UPGRADE_REQUIRED',
         });
       }
@@ -418,27 +423,46 @@ async function getPremiumForecastData({ lat, lon, days = 7, units = 'metric' }) 
   return { daily, hourly, units: unit, generatedAt: Date.now() };
 }
 
+async function fetchCurrentWeather(query) {
+  const coords = coordsFromQuery(query);
+  const units = normalizeUnits(query.units);
+  let url;
+  if (coords) {
+    url = `${BASE}/weather?lat=${coords.lat}&lon=${coords.lon}&units=${units}&appid=${API_KEY}`;
+  } else if (query.city) {
+    url = `${BASE}/weather?q=${encodeURIComponent(String(query.city))}&units=${units}&appid=${API_KEY}`;
+  } else {
+    const e = new Error('Provide city or valid lat/lon');
+    e.status = 400;
+    throw e;
+  }
+  const data = await fetchJson(url, { ttl: DEFAULT_TTL.weather });
+  const code = Number(data.cod);
+  if (code && code !== 200) {
+    const e = new Error('Weather data unavailable');
+    e.status = code >= 400 && code < 600 ? code : 502;
+    throw e;
+  }
+  return data;
+}
+
 app.get('/api/weather/current', async (req, res) => {
   try {
     await ensureInitialized();
-    const { city, units = 'metric' } = req.query;
-    const coords = coordsFromQuery(req.query);
-    let url;
-    if (coords) {
-      url = `${BASE}/weather?lat=${coords.lat}&lon=${coords.lon}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
-    } else if (city) {
-      url = `${BASE}/weather?q=${encodeURIComponent(String(city))}&units=${normalizeUnits(units)}&appid=${API_KEY}`;
-    } else {
+    res.json(await fetchCurrentWeather(req.query));
+  } catch (err) {
+    res.status(err.status || 502).json({ error: err.message || 'Failed to fetch weather' });
+  }
+});
+
+app.get('/api/weather/compare', requireFeature('multiCityCompare'), async (req, res) => {
+  try {
+    if (!req.query.city && !coordsFromQuery(req.query)) {
       return res.status(400).json({ error: 'Provide city or valid lat/lon' });
     }
-    const data = await fetchJson(url, { ttl: DEFAULT_TTL.weather });
-    const code = Number(data.cod);
-    if (code && code !== 200) {
-      return res.status(code >= 400 && code < 600 ? code : 502).json({ error: 'Weather data unavailable' });
-    }
-    res.json(data);
-  } catch {
-    res.status(502).json({ error: 'Failed to fetch weather' });
+    res.json(await fetchCurrentWeather(req.query));
+  } catch (err) {
+    res.status(err.status || 502).json({ error: err.message || 'Could not compare location' });
   }
 });
 
@@ -608,6 +632,12 @@ app.get('/api/premium/forecast', requireFeature('extendedForecast'), async (req,
     const { city, lat, lon, days = 7, units = 'metric' } = req.query;
     const allowedDays = maxForecastDaysFor(currentSubscription(req.subscriberId));
     const requestedDays = Math.max(1, Math.min(allowedDays, Number(days) || 7));
+    if (requestedDays > 14 && !hasEntitlement(currentSubscription(req.subscriberId), 'climateAnalytics')) {
+      return res.status(403).json({
+        error: '30-day climate forecasts require Weather Intelligence.',
+        code: 'UPGRADE_REQUIRED',
+      });
+    }
     const location = await resolveLocation({ city, lat, lon });
     if (city) location.name = String(city);
     const forecast = await getPremiumForecastData({ lat: location.lat, lon: location.lon, days: requestedDays, units });
@@ -675,6 +705,16 @@ function getSubscription(subscriberId) {
   return activeSubscription(subscriptions[subscriberId]);
 }
 
+function subscriptionResponse(subscriberId) {
+  const subscription = getSubscription(subscriberId);
+  return {
+    ...subscription,
+    daysRemaining: subscription.expiresAt
+      ? Math.max(0, Math.ceil((subscription.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)))
+      : null,
+  };
+}
+
 function setSubscription(subscriberId, plan, source, ttlMs) {
   subscriptions[subscriberId] = {
     plan,
@@ -683,6 +723,38 @@ function setSubscription(subscriberId, plan, source, ttlMs) {
     since: Date.now(),
     expiresAt: ttlMs ? Date.now() + ttlMs : null,
   };
+}
+
+function cancelSubscription(subscriberId) {
+  const current = subscriptions[subscriberId];
+  if (!current || current.source === 'free') return;
+  subscriptions[subscriberId] = { ...current, status: 'cancelled', cancelledAt: Date.now() };
+}
+
+function moveOwned(collection, from, to) {
+  for (const record of collection) {
+    if (record.owner === from) record.owner = to;
+  }
+}
+
+function migrateSubscriberState(from, to) {
+  if (!from || from === to) return;
+  moveOwned(favorites, from, to);
+  moveOwned(searchHistory, from, to);
+  moveOwned(alertRules, from, to);
+  moveOwned(notifications, from, to);
+  moveOwned(pushSubscriptions, from, to);
+  for (const checkout of checkouts) {
+    if (checkout.subscriberId === from) checkout.subscriberId = to;
+  }
+  const source = activeSubscription(subscriptions[from]);
+  if (source.plan !== 'free') {
+    const target = activeSubscription(subscriptions[to]);
+    if (source.source === 'paystack' || target.plan === 'free') {
+      subscriptions[to] = subscriptions[from];
+    }
+  }
+  delete subscriptions[from];
 }
 
 app.post('/api/auth/register', async (req, res) => {
@@ -705,6 +777,7 @@ app.post('/api/auth/register', async (req, res) => {
       subscriberId: createSubscriberId(),
       createdAt: Date.now(),
     };
+    migrateSubscriberState(subscriberFrom(req), user.subscriberId);
     users.push(user);
     await persist();
     setAuthCookies(res, user.subscriberId, user.id);
@@ -724,6 +797,9 @@ app.post('/api/auth/login', async (req, res) => {
     if (!user || !passwordMatches(password, user)) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
+    await ensureInitialized();
+    migrateSubscriberState(subscriberFrom(req), user.subscriberId);
+    await persist();
     setAuthCookies(res, user.subscriberId, user.id);
     res.json({ user: publicUser(user), subscription: getSubscription(user.subscriberId) });
   } catch (err) {
@@ -747,25 +823,55 @@ app.get('/api/auth/me', async (req, res) => {
 });
 
 app.get('/api/plans', (_req, res) => {
-  res.json({ plans: Object.values(PLANS), currency: 'NGN', paymentsConfigured: Boolean(PAYSTACK_SECRET_KEY) });
+  res.json({
+    plans: Object.values(PLANS),
+    currency: 'NGN',
+    paymentsConfigured: Boolean(PAYSTACK_SECRET_KEY),
+    demoUpgradesEnabled: DEMO_UPGRADES_ENABLED,
+    billingDays: BILLING_DAYS,
+  });
 });
 
 app.get('/api/subscription', async (req, res) => {
   await ensureInitialized();
-  res.json(getSubscription(subscriberFrom(req)));
+  res.json(subscriptionResponse(subscriberFrom(req)));
 });
 
 app.post('/api/subscription/demo', async (req, res) => {
   await ensureInitialized();
   if (!DEMO_UPGRADES_ENABLED) {
-    return res.status(403).json({ error: 'Demo upgrades are disabled in production.' });
+    return res.status(403).json({ error: 'Demo upgrades are disabled in production.', code: 'DEMO_DISABLED' });
   }
   const plan = String(req.body?.plan || '');
-  if (!PLAN_IDS.includes(plan)) return res.status(400).json({ error: 'Unknown plan' });
+  if (!PLAN_IDS.includes(plan) || plan === 'free') return res.status(400).json({ error: 'Unknown plan' });
   const id = subscriberFrom(req);
+  const current = activeSubscription(subscriptions[id]);
+  if (current.source === 'paystack' && current.plan !== plan) {
+    return res.status(403).json({ error: 'Manage your paid subscription from the Plans tab.', code: 'PAID_SUBSCRIPTION' });
+  }
+  if (current.source === 'paystack' && current.plan === plan) {
+    return res.json(subscriptionResponse(id));
+  }
   setSubscription(id, plan, 'demo', DEMO_TTL_MS);
   await persist();
-  res.json(getSubscription(id));
+  res.json(subscriptionResponse(id));
+});
+
+app.post('/api/subscription/manage', async (req, res) => {
+  await ensureInitialized();
+  const id = subscriberFrom(req);
+  const action = req.body?.action;
+  const current = activeSubscription(subscriptions[id]);
+  if (current.source === 'free') return res.json(subscriptionResponse(id));
+  if (action === 'downgrade') {
+    setSubscription(id, 'free', 'free', null);
+  } else if (action === 'cancel') {
+    cancelSubscription(id);
+  } else {
+    return res.status(400).json({ error: 'Use cancel or downgrade' });
+  }
+  await persist();
+  res.json(subscriptionResponse(id));
 });
 
 app.post('/api/billing/checkout', async (req, res) => {
@@ -775,17 +881,32 @@ app.post('/api/billing/checkout', async (req, res) => {
       return res.status(503).json({ error: 'Payments are not configured yet. Use demo mode to preview plans.', code: 'PAYMENTS_NOT_CONFIGURED' });
     }
     const plan = getPlan(req.body?.plan);
-    const email = String(req.body?.email || '').trim();
-    if (!email) return res.status(400).json({ error: 'Email is required for checkout' });
+    const authenticatedUser = users.find(record => record.id === req.userId);
+    const email = normalizeEmail(req.body?.email || authenticatedUser?.email);
+    if (!EMAIL_PATTERN.test(email)) return res.status(400).json({ error: 'Enter a valid email address for checkout' });
     if (plan.id === 'free') return res.status(400).json({ error: 'The free plan does not require checkout' });
     const subscriberId = subscriberFrom(req);
     const reference = `WP-${Date.now()}-${genId()}`;
+    const amount = plan.price * 100;
+    const checkout = {
+      reference,
+      subscriberId,
+      plan: plan.id,
+      email,
+      amount,
+      currency: plan.currency,
+      status: 'pending',
+      createdAt: Date.now(),
+    };
+    checkouts.unshift(checkout);
+    await persist();
+
     const response = await fetch(`${PAYSTACK_BASE}/transaction/initialize`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
       body: JSON.stringify({
         email,
-        amount: plan.price * 100,
+        amount,
         reference,
         callback_url: process.env.PAYSTACK_CALLBACK_URL || undefined,
         metadata: { subscriberId, plan: plan.id },
@@ -793,6 +914,8 @@ app.post('/api/billing/checkout', async (req, res) => {
     });
     const data = await response.json();
     if (!response.ok || !data.status) {
+      checkout.status = 'failed';
+      await persist();
       return res.status(502).json({ error: data.message || 'Could not start checkout' });
     }
     res.json({ authorizationUrl: data.data.authorization_url, reference });
@@ -807,6 +930,11 @@ app.get('/api/billing/verify', async (req, res) => {
     if (!PAYSTACK_SECRET_KEY) return res.status(503).json({ error: 'Payments are not configured' });
     const reference = String(req.query.reference || '');
     if (!reference) return res.status(400).json({ error: 'reference required' });
+    const checkout = checkouts.find(record => record.reference === reference);
+    if (!checkout) return res.status(404).json({ error: 'Unknown checkout reference' });
+    if (checkout.subscriberId !== req.subscriberId) {
+      return res.status(403).json({ error: 'Payment does not belong to this session.' });
+    }
     const response = await fetch(`${PAYSTACK_BASE}/transaction/verify/${encodeURIComponent(reference)}`, {
       headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
     });
@@ -814,13 +942,13 @@ app.get('/api/billing/verify', async (req, res) => {
     if (!response.ok || !data.status) return res.status(502).json({ error: 'Verification failed' });
     const transaction = data.data || {};
     if (transaction.status === 'success') {
-      const id = String(transaction.metadata?.subscriberId || '');
-      const plan = transaction.metadata?.plan;
-      if (!id || id !== req.subscriberId) {
-        return res.status(403).json({ error: 'Payment does not belong to this session.' });
-      }
+      const id = String(transaction.metadata?.subscriberId || checkout.subscriberId);
+      const plan = checkout.plan;
       if (!PLAN_IDS.includes(plan) || plan === 'free') {
-        return res.status(400).json({ error: 'Invalid plan in payment metadata.' });
+        return res.status(400).json({ error: 'Invalid plan in checkout record.' });
+      }
+      if (id !== checkout.subscriberId || transaction.metadata?.plan !== plan) {
+        return res.status(409).json({ error: 'Payment metadata does not match the checkout.' });
       }
       const expected = getPlan(plan);
       const amount = Number(transaction.amount);
@@ -828,10 +956,12 @@ app.get('/api/billing/verify', async (req, res) => {
       if (amount !== expected.price * 100 || currency !== expected.currency) {
         return res.status(409).json({ error: 'Payment amount or currency does not match the plan.' });
       }
-      setSubscription(id, plan, 'paystack', 365 * 24 * 60 * 60 * 1000);
+      setSubscription(id, plan, 'paystack', BILLING_PERIOD_MS);
+      checkout.status = 'success';
+      checkout.verifiedAt = Date.now();
       await persist();
     }
-    res.json({ success: transaction.status === 'success', subscription: getSubscription(req.subscriberId) });
+    res.json({ success: transaction.status === 'success', subscription: subscriptionResponse(req.subscriberId) });
   } catch {
     res.status(500).json({ error: 'Verification failed' });
   }
@@ -851,20 +981,21 @@ app.post('/api/billing/webhook', async (req, res) => {
     const event = req.body || {};
     const eventId = String(event.id || signature);
     if (processedEvents.has(eventId)) return res.json({ received: true });
-    processedEvents.add(eventId);
     if (event.event === 'charge.success') {
-      const id = String(event.data?.metadata?.subscriberId || '');
-      const plan = event.data?.metadata?.plan;
-      if (id && PLAN_IDS.includes(plan) && plan !== 'free') {
-        const expectedPlan = getPlan(plan);
-        const amount = Number(event.data?.amount);
-        const currency = String(event.data?.currency || '').toUpperCase();
-        if (amount === expectedPlan.price * 100 && currency === expectedPlan.currency) {
-          setSubscription(id, plan, 'paystack', 365 * 24 * 60 * 60 * 1000);
-        }
+      const reference = String(event.data?.reference || '');
+      const checkout = checkouts.find(record => record.reference === reference);
+      if (!checkout) return res.status(404).json({ error: 'Unknown checkout reference' });
+      const expectedPlan = getPlan(checkout.plan);
+      const amount = Number(event.data?.amount);
+      const currency = String(event.data?.currency || '').toUpperCase();
+      if (amount === expectedPlan.price * 100 && currency === expectedPlan.currency) {
+        setSubscription(checkout.subscriberId, checkout.plan, 'paystack', BILLING_PERIOD_MS);
+        checkout.status = 'success';
+        checkout.paidAt = Date.now();
       }
     }
     await persist();
+    processedEvents.add(eventId);
     res.json({ received: true });
   } catch {
     res.status(500).json({ error: 'Webhook failed' });
@@ -1004,7 +1135,7 @@ async function deliverNotification(notification, rule) {
     }
   }
 
-  if (configured.webhook) {
+  if (channels.includes('webhook') && configured.webhook) {
     try {
       const response = await fetch(NOTIFICATION_WEBHOOK_URL, {
         method: 'POST',
@@ -1034,6 +1165,7 @@ async function recordNotification(rule, evaluation) {
     message: `${rule.city || 'Your location'}: ${evaluation.reason}`,
     channels: rule.channels || ['in-app'],
     createdAt: Date.now(),
+    readAt: null,
     delivery: {},
   };
   notifications.unshift(notification);
@@ -1077,6 +1209,32 @@ async function evaluatedRules(owner) {
   }
   return userRules.map(rule => results.get(rule.id) || { ...rule, triggered: false, value: null, reason: 'Rule is paused' });
 }
+
+export async function evaluateScheduledAlerts({ plan } = {}) {
+  await ensureInitialized();
+  let evaluated = 0;
+  let triggered = 0;
+  for (const owner of new Set(alertRules.map(rule => rule.owner))) {
+    const subscription = getSubscription(owner);
+    if (plan && subscription.plan !== plan) continue;
+    if (!hasEntitlement(subscription, 'customAlerts')) continue;
+    const results = await evaluatedRules(owner);
+    evaluated += results.length;
+    triggered += results.filter(result => result.triggered).length;
+  }
+  await persist();
+  return { plan: plan || 'all', evaluated, triggered, ranAt: Date.now() };
+}
+
+app.post('/api/alerts/evaluate', requireFeature('customAlerts'), async (req, res) => {
+  try {
+    const results = await evaluatedRules(req.subscriberId);
+    await persist();
+    res.json(results);
+  } catch {
+    res.status(500).json({ error: 'Could not evaluate alert rules' });
+  }
+});
 
 app.get('/api/alerts/rules', requireFeature('customAlerts'), async (req, res) => {
   await ensureInitialized();
@@ -1144,9 +1302,32 @@ app.delete('/api/alerts/rules/:id', requireFeature('customAlerts'), async (req, 
   res.json({ success: true });
 });
 
+app.get('/api/alerts/notifications/summary', requireFeature('customAlerts'), async (req, res) => {
+  await ensureInitialized();
+  const list = owned(notifications, req.subscriberId);
+  res.json({ total: list.length, unread: list.filter(notification => !notification.readAt).length });
+});
+
+app.post('/api/alerts/notifications/read-all', requireFeature('customAlerts'), async (req, res) => {
+  await ensureInitialized();
+  const list = owned(notifications, req.subscriberId);
+  for (const notification of list) notification.readAt = notification.readAt || Date.now();
+  await persist();
+  res.json({ success: true, unread: 0 });
+});
+
+app.post('/api/alerts/notifications/:id/read', requireFeature('customAlerts'), async (req, res) => {
+  await ensureInitialized();
+  const notification = findOwned(notifications, req.params.id, req.subscriberId);
+  if (!notification) return res.status(404).json({ error: 'Not found' });
+  notification.readAt = notification.readAt || Date.now();
+  await persist();
+  res.json(notification);
+});
+
 app.get('/api/alerts/notifications', requireFeature('customAlerts'), async (req, res) => {
   await ensureInitialized();
-  res.json(owned(notifications, req.subscriberId).slice(0, 20));
+  res.json(owned(notifications, req.subscriberId));
 });
 
 app.get('/api/alerts/channels', async (_req, res) => {

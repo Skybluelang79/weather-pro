@@ -19,10 +19,13 @@ describe('subscription entitlements', () => {
     expect(hasFeature('pro', 'climateAnalytics')).toBe(false);
     expect(maxForecastDays('pro')).toBe(14);
     expect(maxFavorites('pro')).toBe(Infinity);
+    expect(maxHistory('pro')).toBe(Infinity);
+    expect(hasFeature('pro', 'priorityAlerts')).toBe(false);
   });
 
-  it('adds the 30-day outlook for premium', () => {
+  it('adds the 30-day outlook and priority checks for premium', () => {
     expect(hasFeature('premium', 'climateAnalytics')).toBe(true);
+    expect(hasFeature('premium', 'priorityAlerts')).toBe(true);
     expect(maxForecastDays('premium')).toBe(30);
   });
 

@@ -1,28 +1,20 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { FEATURE_PLAN, PLAN_RANK } from './plans.js';
+
+export { FEATURE_PLAN, PLAN_RANK };
 
 export const SESSION_COOKIE = 'weatherpro_sid';
 export const USER_COOKIE = 'weatherpro_user';
 const COOKIE_MAX_AGE = 365 * 24 * 60 * 60;
 const FREE_SUBSCRIPTION = { plan: 'free', status: 'active', source: 'free', since: null, expiresAt: null };
 
-export const PLAN_RANK = { free: 0, pro: 1, premium: 2 };
-
-export const FEATURE_PLAN = {
-  extendedForecast: 'pro',
-  hourlyRain: 'pro',
-  windIntelligence: 'pro',
-  weatherMaps: 'pro',
-  aiAssistant: 'pro',
-  customAlerts: 'pro',
-  unlimitedLocations: 'pro',
-  weatherHistory: 'pro',
-  adFree: 'pro',
-  multiCityCompare: 'pro',
-  climateAnalytics: 'premium',
-};
-
 function sessionSecret() {
-  return process.env.SESSION_SECRET || process.env.PAYSTACK_SECRET_KEY || 'weatherpro-local-session-secret';
+  const secret = process.env.SESSION_SECRET || process.env.PAYSTACK_SECRET_KEY || 'weatherpro-local-session-secret';
+  const production = process.env.NODE_ENV === 'production' || process.env.NETLIFY === 'true';
+  if (production && secret === 'weatherpro-local-session-secret') {
+    throw new Error('SESSION_SECRET must be set in production');
+  }
+  return secret;
 }
 
 export function createSubscriberId() {
@@ -80,7 +72,11 @@ function readCookie(req, name) {
     const index = part.indexOf('=');
     if (index < 0) continue;
     if (part.slice(0, index).trim() === name) {
-      return decodeURIComponent(part.slice(index + 1).trim());
+      try {
+        return decodeURIComponent(part.slice(index + 1).trim());
+      } catch {
+        return null;
+      }
     }
   }
   return null;
@@ -144,7 +140,7 @@ export function maxFavoritesFor(subscription) {
 }
 
 export function maxHistoryFor(subscription) {
-  return hasEntitlement(subscription, 'weatherHistory') ? 20 : 5;
+  return hasEntitlement(subscription, 'weatherHistory') ? Infinity : 5;
 }
 
 export function maxForecastDaysFor(subscription) {

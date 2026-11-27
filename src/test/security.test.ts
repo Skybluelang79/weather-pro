@@ -68,7 +68,7 @@ describe('subscription entitlements', () => {
       expect(hasEntitlement(plan, 'aiAssistant')).toBe(true);
       expect(hasEntitlement(plan, 'customAlerts')).toBe(true);
       expect(maxFavoritesFor(plan)).toBe(Infinity);
-      expect(maxHistoryFor(plan)).toBe(20);
+      expect(maxHistoryFor(plan)).toBe(Infinity);
     }
     expect(maxForecastDaysFor(pro)).toBe(14);
     expect(maxForecastDaysFor(premium)).toBe(30);

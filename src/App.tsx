@@ -25,6 +25,7 @@ import WeatherMap from './components/WeatherMap';
 import Pricing from './components/Pricing';
 import UpgradeCard from './components/UpgradeCard';
 import AuthModal from './components/AuthModal';
+import NotificationInbox from './components/NotificationInbox';
 import { AuthProvider } from './context/AuthContext';
 import { useAuth } from './context/auth';
 import { SubscriptionProvider } from './context/SubscriptionContext';
@@ -49,6 +50,7 @@ function AppInner() {
   const { addToast } = useToast();
   const { user, logout } = useAuth();
   const { plan, hasFeature, maxFavorites, maxHistory, loading: subscriptionLoading } = useSubscription();
+  const alertsEnabled = hasFeature('customAlerts');
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [forecast, setForecast] = useState<ForecastData | null>(null);
   const [air, setAir] = useState<AirQualityData | null>(null);
@@ -62,6 +64,8 @@ function AppInner() {
   const [theme, setTheme] = useState<string>(getInitialTheme);
   const [showMap, setShowMap] = useState(false);
   const [authOpen, setAuthOpen] = useState(false);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [compareWeather, setCompareWeather] = useState<WeatherData | null>(null);
   const requestId = useRef(0);
   const goToPlans = () => setActiveTab('plans');
@@ -102,6 +106,22 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
+    if (!alertsEnabled) {
+      setUnreadCount(0);
+      return undefined;
+    }
+    let active = true;
+    const updateUnread = () => {
+      api.getNotificationSummary()
+        .then(summary => { if (active) setUnreadCount(summary.unread); })
+        .catch(() => {});
+    };
+    updateUnread();
+    const timer = window.setInterval(updateUnread, 60000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [alertsEnabled, user?.id]);
+
+  useEffect(() => {
     if (!weather) return;
     const iconCode = weather.weather[0].icon;
     const svg = generateFaviconSVG(iconCode);
@@ -140,7 +160,7 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showMap]);
 
-  const fetchAll = useCallback(async (params: Record<string, string>, recordAs?: string) => {
+  const fetchAll = useCallback(async (params: Record<string, string>, recordAs?: string, preserveCompare = false) => {
     const id = ++requestId.current;
     setLoading(true);
     setError('');
@@ -152,7 +172,7 @@ function AppInner() {
       if (id !== requestId.current) return;
       setWeather(w);
       setForecast(f);
-      setCompareWeather(null);
+      if (!preserveCompare) setCompareWeather(null);
       setAir(null);
       if (w.coord) {
         api.getAirQuality(w.coord.lat, w.coord.lon)
@@ -196,10 +216,18 @@ function AppInner() {
     setActiveTab('weather');
   };
 
+  const closeInbox = () => {
+    setInboxOpen(false);
+    if (!alertsEnabled) return;
+    api.getNotificationSummary()
+      .then(summary => setUnreadCount(summary.unread))
+      .catch(() => {});
+  };
+
   const handleCompareCity = async (city: string) => {
     if (!city.trim()) return;
     try {
-      const w = await api.getCurrent({ city: city.trim() });
+      const w = await api.getCompareWeather(city.trim());
       setCompareWeather(w);
       addToast(`Added ${w.name} for comparison`, 'success');
     } catch (err) {
@@ -305,7 +333,17 @@ function AppInner() {
             <span className="logo-text">WeatherPro</span>
           </div>
           <div className="header-actions">
-            <button className="plan-badge-btn" onClick={goToPlans} title="Subscription plans">
+            {alertsEnabled && !subscriptionLoading && (
+              <button
+                className="inbox-btn"
+                onClick={() => setInboxOpen(true)}
+                aria-label={`Weather alerts${unreadCount ? `, ${unreadCount} unread` : ''}`}
+              >
+                <span aria-hidden="true">🔔</span>
+                {unreadCount > 0 && <span className="inbox-badge" aria-hidden="true">{unreadCount}</span>}
+              </button>
+            )}
+            <button className="plan-badge-btn" onClick={goToPlans} title="Subscription plans" aria-label="Subscription plans">
               <span>👑</span>
               <span>{plan === 'premium' ? 'Premium' : plan === 'pro' ? 'Pro' : 'Free'}</span>
             </button>
@@ -351,11 +389,22 @@ function AppInner() {
           {TABS.map((tab, i) => (
             <button
               key={tab}
+              id={`tab-${tab}`}
               className={`tab ${activeTab === tab ? 'active' : ''}`}
               role="tab"
               aria-selected={activeTab === tab}
+              aria-controls="weather-panel"
               aria-label={tab}
+              tabIndex={activeTab === tab ? 0 : -1}
               onClick={() => setActiveTab(tab)}
+              onKeyDown={(event) => {
+                const step = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+                if (!step) return;
+                event.preventDefault();
+                const next = (i + step + TABS.length) % TABS.length;
+                setActiveTab(TABS[next]);
+                document.getElementById(`tab-${TABS[next]}`)?.focus();
+              }}
             >
               {TAB_ICONS[tab]}
               <span className="tab-label">{tab === 'ai' ? 'AI' : tab.charAt(0).toUpperCase() + tab.slice(1)}</span>
@@ -364,7 +413,7 @@ function AppInner() {
           ))}
         </div>
 
-        <main className="main-content">
+        <main className="main-content" id="weather-panel" role="tabpanel" aria-labelledby={`tab-${activeTab}`} tabIndex={0}>
           {loading && activeTab === 'weather' && <SkeletonCurrentWeather />}
           {loading && activeTab === 'forecast' && <SkeletonForecast />}
           {loading && activeTab !== 'weather' && activeTab !== 'forecast' && (
@@ -533,6 +582,11 @@ function AppInner() {
           loading={loading}
         />
         <AuthModal open={authOpen} onClose={() => setAuthOpen(false)} />
+        <NotificationInbox
+          open={inboxOpen}
+          onClose={closeInbox}
+          onGoToAlerts={() => setActiveTab('alerts')}
+        />
       </div>
     </div>
   );

@@ -12,7 +12,21 @@ export default function Favorites({ favorites, onClick, onRemove }: FavoritesPro
       <h3 className="section-title">Saved Locations</h3>
       <div className="favorites-list">
         {favorites.map((fav, i) => (
-          <div key={fav.id} className="fav-card" style={{ animationDelay: `${i * 0.06}s` }} onClick={() => onClick(fav)}>
+          <div
+            key={fav.id}
+            className="fav-card"
+            style={{ animationDelay: `${i * 0.06}s` }}
+            role="button"
+            tabIndex={0}
+            aria-label={`Show weather for ${fav.city}`}
+            onClick={() => onClick(fav)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onClick(fav);
+              }
+            }}
+          >
             <div className="fav-info">
               <span className="fav-city">{fav.city}</span>
               <span className="fav-country">{fav.country}</span>

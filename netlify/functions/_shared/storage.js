@@ -4,7 +4,17 @@ import path from 'path';
 const DATA_FILE = path.join(process.cwd(), 'server', 'data.json');
 
 function emptyState() {
-  return { favorites: [], searchHistory: [], alertRules: [], subscriptions: {}, notifications: [], pushSubscriptions: [], processedEvents: [], users: [] };
+  return {
+    favorites: [],
+    searchHistory: [],
+    alertRules: [],
+    subscriptions: {},
+    notifications: [],
+    pushSubscriptions: [],
+    processedEvents: [],
+    checkouts: [],
+    users: [],
+  };
 }
 
 let blobStorePromise = null;
@@ -47,17 +57,9 @@ export async function loadData() {
 export async function saveData(state) {
   const store = await getBlobStore();
   if (store) {
-    try {
-      await store.setJSON('state', state);
-    } catch (e) {
-      console.error('Failed to save to Netlify blob store:', e.message);
-    }
+    await store.setJSON('state', state);
     return;
   }
-  try {
-    fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('Failed to save data file:', e.message);
-  }
+  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
+  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2), 'utf-8');
 }
