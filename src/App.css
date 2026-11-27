@@ -2537,6 +2537,18 @@ button.notification-item {
 .auth-form { display: flex; flex-direction: column; gap: 12px; padding: 12px 20px 4px; }
 .auth-form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; font-weight: 600; }
 .auth-form label > span:first-child { color: var(--text-secondary); }
+.auth-label-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.auth-forgot {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-forgot:hover:not(:disabled) { text-decoration: underline; }
+.auth-forgot:disabled { opacity: 0.5; cursor: not-allowed; }
 .auth-form input {
   width: 100%;
   padding: 10px 12px;
@@ -2578,6 +2590,14 @@ button.notification-item {
 .password-strength[data-strength='weak'] .password-strength-track span { background: #f87171; }
 .password-strength[data-strength='fair'] .password-strength-track span { background: #fbbf24; }
 .password-strength[data-strength='strong'] .password-strength-track span { background: #4ade80; }
+.auth-notice {
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(74, 222, 128, 0.14);
+  border: 1px solid rgba(74, 222, 128, 0.32);
+  color: var(--text-primary);
+  font-size: 12px;
+}
 .auth-error {
   padding: 9px 12px;
   border-radius: 10px;
@@ -2598,6 +2618,18 @@ button.notification-item {
 }
 .auth-submit:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(124, 58, 237, 0.4); }
 .auth-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.auth-back {
+  align-self: center;
+  padding: 2px 4px;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.auth-back:hover:not(:disabled) { color: var(--text-primary); text-decoration: underline; }
+.auth-back:disabled { opacity: 0.5; cursor: not-allowed; }
 .auth-note { margin: 8px 20px 18px; font-size: 11px; color: var(--text-muted); text-align: center; }
 
 @keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }

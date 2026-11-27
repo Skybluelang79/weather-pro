@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { ToastProvider, useToast } from '../components/Toast'
 import Favorites from '../components/Favorites'
 import History from '../components/History'
@@ -9,8 +9,21 @@ import SunArc from '../components/SunArc'
 import AuthModal from '../components/AuthModal'
 import { AuthContext } from '../context/auth'
 import type { AuthContextValue } from '../context/auth'
+import { api } from '../services/api'
 import { generateFaviconSVG } from '../services/helpers'
 import type { Favorite, HistoryEntry } from '../types'
+
+vi.mock('../services/api', () => ({
+  api: {
+    requestPasswordReset: vi.fn(async () => ({ success: true, message: 'Reset link sent.' })),
+    resetPassword: vi.fn(async () => ({ success: true, message: 'Password updated.' })),
+  },
+}))
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  window.history.replaceState({}, '', '/')
+})
 
 // Helper to render with ToastProvider
 function renderWithToast(ui: React.ReactElement) {
@@ -208,5 +221,38 @@ describe('AuthModal', () => {
     expect(value.signup).not.toHaveBeenCalled()
     expect(screen.getByText('Enter your name.')).toBeDefined()
     expect(screen.getByText('Confirm your password.')).toBeDefined()
+  })
+
+  it('opens the forgot-password form from sign in', () => {
+    renderAuth()
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }))
+    expect(screen.getByRole('heading', { name: 'Reset your password' })).toBeDefined()
+    expect(screen.getByPlaceholderText('you@example.com')).toBeDefined()
+    expect(screen.queryByPlaceholderText('Your password')).toBeNull()
+  })
+
+  it('requests a reset link with a normalized email', async () => {
+    renderAuth()
+    fireEvent.click(screen.getByRole('button', { name: 'Forgot password?' }))
+    fireEvent.change(screen.getByPlaceholderText('you@example.com'), { target: { value: ' User@Example.COM ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send reset link' }))
+    await waitFor(() => {
+      expect(api.requestPasswordReset).toHaveBeenCalledWith('user@example.com')
+    })
+    expect(screen.getByText('Reset link sent.')).toBeDefined()
+  })
+
+  it('opens reset mode from a reset link and submits a new password', async () => {
+    window.history.replaceState({}, '', '/?reset=token123')
+    renderAuth()
+    expect(screen.getByRole('heading', { name: 'Choose a new password' })).toBeDefined()
+    fireEvent.change(screen.getByPlaceholderText('At least 8 characters'), { target: { value: 'StrongPass1!' } })
+    fireEvent.change(screen.getByPlaceholderText('Repeat your password'), { target: { value: 'StrongPass1!' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Update password' }))
+    await waitFor(() => {
+      expect(api.resetPassword).toHaveBeenCalledWith('token123', 'StrongPass1!')
+    })
+    expect(window.location.search).toBe('')
+    expect(screen.getByText('Password updated.')).toBeDefined()
   })
 })

@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { config } from 'dotenv';
 import fetch from 'node-fetch';
-import { createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { sendNotification, setVapidDetails } from 'web-push';
 import { loadData, saveData } from './storage.js';
 import { generateAIAnswer, evaluateRule, weatherCodeInfo, DISCLAIMER } from './intelligence.js';
@@ -27,6 +27,8 @@ const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN
 const DEMO_UPGRADES_ENABLED = process.env.ALLOW_DEMO_UPGRADES === 'true' || !process.env.PAYSTACK_SECRET_KEY;
 const DEMO_TTL_MS = BILLING_DAYS * 24 * 60 * 60 * 1000;
 const BILLING_PERIOD_MS = DEMO_TTL_MS;
+const RESET_TTL_MS = 30 * 60 * 1000;
+const SITE_URL = (process.env.URL || process.env.DEPLOY_PRIME_URL || ALLOWED_ORIGIN).replace(/\/$/, '');
 const ALERT_CHANNELS = ['in-app', 'email', 'sms', 'webhook', 'push'];
 const PUSH_HOSTS = ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'push.apple.com'];
 
@@ -146,6 +148,7 @@ const pushSubscriptions = [];
 const processedEvents = new Set();
 const checkouts = [];
 const users = [];
+const passwordResets = [];
 let initPromise = null;
 
 function ensureInitialized() {
@@ -159,6 +162,7 @@ function ensureInitialized() {
       Object.assign(subscriptions, data.subscriptions || {});
       checkouts.push(...(data.checkouts || []));
       users.push(...(data.users || []));
+      passwordResets.push(...(data.passwordResets || []));
       for (const id of data.processedEvents || []) processedEvents.add(String(id));
     }).catch((e) => console.error('Failed to load persisted state:', e.message));
   }
@@ -180,6 +184,7 @@ async function persist() {
     processedEvents: [...processedEvents],
     checkouts,
     users,
+    passwordResets,
   });
 }
 
@@ -757,6 +762,26 @@ function migrateSubscriberState(from, to) {
   delete subscriptions[from];
 }
 
+function hashResetToken(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+async function sendPasswordResetEmail(email, token) {
+  const link = `${SITE_URL}/?reset=${encodeURIComponent(token)}`;
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: ALERT_EMAIL_FROM,
+      to: [email],
+      subject: 'Reset your WeatherPro password',
+      html: `<p>Use the link below to reset your WeatherPro password. It expires in 30 minutes.</p><p><a href="${escapeHtml(link)}">Reset my password</a></p><p>If you did not request this, you can ignore this email.</p>`,
+      text: `Reset your WeatherPro password: ${link}\nThis link expires in 30 minutes. If you did not request it, you can ignore this email.`,
+    }),
+  });
+  return response.ok;
+}
+
 app.post('/api/auth/register', async (req, res) => {
   try {
     await ensureInitialized();
@@ -808,6 +833,80 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error('Login failed:', err.message);
     res.status(500).json({ error: 'Could not sign in.' });
+  }
+});
+
+app.post('/api/auth/forgot-password', async (req, res) => {
+  try {
+    await ensureInitialized();
+    const email = normalizeEmail(req.body?.email);
+    if (!EMAIL_PATTERN.test(email) || email.length > 254) {
+      return res.status(400).json({ error: 'Enter a valid email address.' });
+    }
+    if (!RESEND_API_KEY) {
+      return res.status(503).json({ error: 'Password reset email is not configured for this deployment. Please contact support.' });
+    }
+
+    const now = Date.now();
+    for (let i = passwordResets.length - 1; i >= 0; i -= 1) {
+      if (passwordResets[i].usedAt || passwordResets[i].expiresAt <= now) passwordResets.splice(i, 1);
+    }
+
+    const user = users.find(record => record.email === email);
+    if (user) {
+      const token = randomBytes(32).toString('base64url');
+      passwordResets.push({
+        id: genId(),
+        userId: user.id,
+        tokenHash: hashResetToken(token),
+        createdAt: now,
+        expiresAt: now + RESET_TTL_MS,
+        usedAt: null,
+      });
+      await persist();
+      const sent = await sendPasswordResetEmail(email, token);
+      if (!sent) {
+        return res.status(502).json({ error: 'Could not send the reset email. Please try again.' });
+      }
+    }
+
+    res.json({ success: true, message: 'If an account exists for that email, a reset link has been sent.' });
+  } catch (err) {
+    console.error('Password reset request failed:', err.message);
+    res.status(500).json({ error: 'Could not request a password reset.' });
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res) => {
+  try {
+    await ensureInitialized();
+    const token = String(req.body?.token || '');
+    const password = String(req.body?.password || '');
+    if (!token || token.length > 512) {
+      return res.status(400).json({ error: 'This reset link is invalid.' });
+    }
+    if (password.length < 8 || password.length > 128) {
+      return res.status(400).json({ error: 'Password must be between 8 and 128 characters.' });
+    }
+
+    const now = Date.now();
+    const record = passwordResets.find(entry => entry.tokenHash === hashResetToken(token) && !entry.usedAt && entry.expiresAt > now);
+    const user = record && users.find(entry => entry.id === record.userId);
+    if (!record || !user) {
+      return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+    }
+
+    const { salt, hash } = hashPassword(password);
+    user.salt = salt;
+    user.passwordHash = hash;
+    for (const entry of passwordResets) {
+      if (entry.userId === user.id && !entry.usedAt) entry.usedAt = now;
+    }
+    await persist();
+    res.json({ success: true, message: 'Password updated. You can now sign in.' });
+  } catch (err) {
+    console.error('Password reset failed:', err.message);
+    res.status(500).json({ error: 'Could not reset the password.' });
   }
 });
 

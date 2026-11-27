@@ -36,6 +36,10 @@ export const api = {
     post('/auth/login', data),
   logout: (): Promise<{ success: boolean }> => post('/auth/logout', {}),
   getAuthMe: (): Promise<{ user: AuthUser | null; subscription: Subscription }> => get('/auth/me'),
+  requestPasswordReset: (email: string): Promise<{ success: boolean; message: string }> =>
+    post('/auth/forgot-password', { email }),
+  resetPassword: (token: string, password: string): Promise<{ success: boolean; message: string }> =>
+    post('/auth/reset-password', { token, password }),
 
   getCurrent: (params: Record<string, string>): Promise<WeatherData> => {
     const qs = new URLSearchParams(params).toString();

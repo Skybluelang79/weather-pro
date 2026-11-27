@@ -18,6 +18,7 @@ function emptyState() {
     processedEvents: [],
     checkouts: [],
     users: [],
+    passwordResets: [],
   };
 }
 

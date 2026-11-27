@@ -42,7 +42,8 @@ Copy `.env.example` to `.env` and fill in only what you need. Never commit `.env
 | `PAYSTACK_SECRET_KEY` | No | Enables real Paystack checkout, verification and webhooks |
 | `PAYSTACK_CALLBACK_URL` | No | Redirect after Paystack checkout, e.g. `https://your-site.netlify.app/?billing=verify` |
 | `NOTIFICATION_WEBHOOK_URL` | No | Enables the webhook delivery channel for rules that select it |
-| `RESEND_API_KEY`, `ALERT_EMAIL_FROM`, `ALERT_EMAIL_TO` | No | Email delivery via Resend |
+| `RESEND_API_KEY`, `ALERT_EMAIL_FROM` | Password resets | Sends password reset links via Resend; the from address must be verified in Resend |
+| `ALERT_EMAIL_TO` | No | Default recipient for alert-rule email delivery |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `ALERT_SMS_TO` | No | SMS delivery via Twilio |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` | No | Browser push delivery |
 
@@ -70,6 +71,17 @@ netlify env:set PAYSTACK_SECRET_KEY sk_live_xxxx --site 1c5a07ef-fa98-4e7d-9bc9-
 Without `PAYSTACK_SECRET_KEY`, `/api/plans` reports `paymentsConfigured: false` and checkout falls back to local demo upgrades. When a Paystack key is present, `/api/subscription/demo` is disabled unless `ALLOW_DEMO_UPGRADES=true`. Each successful Paystack transaction unlocks 30 days of access; the Plans tab can renew, cancel or switch back to Basic. Checkout records are stored server-side and verified against Paystack amount, currency, plan and subscriber before activation, while the webhook remains the authoritative activation path if the browser callback is interrupted.
 
 Subscriber identity is an HTTP-only signed cookie issued by the API; client-supplied subscriber IDs are ignored. Sign-up and sign-in are available from the header: passwords are hashed with scrypt, accounts map to a stable subscriber ID, anonymous subscriptions/favorites/history/rules migrate into the account on register or login, and the signed user cookie is cleared on logout. PRO endpoints are also enforced server-side: extended forecast (14 days), maps, AI assistant, custom alerts, multi-city comparison, full history, and unlimited favorites return `403 UPGRADE_REQUIRED` for Basic users. Premium raises the extended forecast cap to 30 days and adds climate analytics and hourly background alert checks.
+
+## Password reset
+
+The sign-in form has a "Forgot password?" link. It asks for the account email, then sends a single-use reset link that opens the chosen-new-password form automatically from `?reset=<token>`. Links expire after 30 minutes, token hashes are stored server-side, and successful resets invalidate all outstanding links for that account. The API never reveals whether an email exists.
+
+Password reset delivery requires `RESEND_API_KEY` and a verified `ALERT_EMAIL_FROM` sender. Without `RESEND_API_KEY`, `/api/auth/forgot-password` returns `503` instead of claiming an email was sent.
+
+```bash
+netlify env:set RESEND_API_KEY re_xxxx --site 1c5a07ef-fa98-4e7d-9bc9-832e12992b45
+netlify env:set ALERT_EMAIL_FROM 'WeatherPro <alerts@yourdomain.com>' --site 1c5a07ef-fa98-4e7d-9bc9-832e12992b45
+```
 
 ## Scripts
 
@@ -99,6 +111,7 @@ npm run typecheck  # TypeScript check
 | `/api/billing/checkout`, `/api/billing/verify`, `/api/billing/webhook` | Paystack payments |
 | `/api/alerts/rules`, `/api/alerts/evaluate`, `/api/alerts/notifications` | Custom alert rules, manual evaluation and inbox |
 | `/api/alerts/notifications/summary`, `/api/alerts/notifications/:id/read`, `/api/alerts/notifications/read-all` | Unread count and read state |
+| `/api/auth/forgot-password`, `/api/auth/reset-password` | Password reset request and token-based password update |
 | `/api/alerts/channels`, `/api/alerts/push-subscription` | Delivery configuration and push subscriptions |
 
 ## Alerts and delivery

@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeAuthEmail,
   passwordStrength,
+  validateForgotPassword,
   validateLogin,
+  validatePasswordReset,
   validateSignup,
 } from '../services/authValidation';
 
@@ -55,6 +57,24 @@ describe('auth validation', () => {
       password: 'StrongPass1!',
       confirmPassword: 'StrongPass1!',
     })).toEqual({});
+  });
+
+  it('validates password reset email input', () => {
+    expect(validateForgotPassword('')).toEqual({ email: 'Enter your email address.' });
+    expect(validateForgotPassword('bad')).toEqual({ email: 'Enter a valid email address.' });
+    expect(validateForgotPassword('user@example.com')).toEqual({});
+  });
+
+  it('validates new password and confirmation', () => {
+    expect(validatePasswordReset({ password: '', confirmPassword: '' })).toEqual({
+      password: 'Enter a new password.',
+      confirmPassword: 'Confirm your password.',
+    });
+    expect(validatePasswordReset({ password: 'short', confirmPassword: 'short' }).password)
+      .toBe('Use at least 8 characters.');
+    expect(validatePasswordReset({ password: 'StrongPass1!', confirmPassword: 'different' }).confirmPassword)
+      .toBe('Passwords do not match.');
+    expect(validatePasswordReset({ password: 'StrongPass1!', confirmPassword: 'StrongPass1!' })).toEqual({});
   });
 
   it('rates password strength', () => {
