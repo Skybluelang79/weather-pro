@@ -243,7 +243,7 @@ function AppInner() {
       const params: Record<string, string> = weather.coord
         ? { lat: String(weather.coord.lat), lon: String(weather.coord.lon) }
         : { city: weather.name };
-      fetchAll(params);
+      fetchAll(params, undefined, true);
     }
   };
 

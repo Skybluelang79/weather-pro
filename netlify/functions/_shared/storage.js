@@ -1,7 +1,11 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
-const DATA_FILE = path.join(process.cwd(), 'server', 'data.json');
+const SERVERLESS = process.env.NETLIFY === 'true' || Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME) || Boolean(process.env.LAMBDA_TASK_ROOT);
+const DATA_FILE = SERVERLESS
+  ? path.join(os.tmpdir(), 'weatherpro-data.json')
+  : path.join(process.cwd(), 'server', 'data.json');
 
 function emptyState() {
   return {
@@ -22,11 +26,12 @@ let blobStorePromise = null;
 function getBlobStore() {
   if (blobStorePromise) return blobStorePromise;
   blobStorePromise = (async () => {
-    if (process.env.NETLIFY !== 'true') return null;
+    if (!SERVERLESS) return null;
     try {
       const { getStore } = await import('@netlify/blobs');
       return getStore({ name: 'weatherpro-data' });
-    } catch {
+    } catch (error) {
+      console.error('Netlify Blobs unavailable:', error.message);
       return null;
     }
   })();
