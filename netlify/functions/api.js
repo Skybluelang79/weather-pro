@@ -1,3 +1,4 @@
+import { connectLambda } from '@netlify/blobs';
 import serverless from 'serverless-http';
 import appModule from './_shared/app.js';
 
@@ -16,5 +17,11 @@ function unwrapDefault(m) {
 
 const app = unwrapDefault(appModule);
 const adapter = unwrapDefault(serverless);
+const serverlessHandler = adapter(app);
 
-export const handler = adapter(app);
+export const handler = async (event, context) => {
+  try {
+    connectLambda(event);
+  } catch {}
+  return serverlessHandler(event, context);
+};
